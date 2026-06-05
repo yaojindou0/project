@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>坐标转换工具</title>
+    <script src="gcoord.global.prod.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Microsoft YaHei', 'Segoe UI', Arial, sans-serif;
+            background: #f0f2f5;
+            color: #333;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #409eff 0%, #337ecc 100%);
+            color: #fff;
+            padding: 20px 24px;
+            box-shadow: 0 2px 8px rgba(64, 158, 255, 0.3);
+        }
+        .header h1 { margin: 0 0 6px; font-size: 22px; font-weight: 600; }
+        .header p { margin: 0; font-size: 13px; opacity: 0.9; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px 24px 40px; }
+        .panel {
+            background: #fff;
+            border-radius: 8px;
+            padding: 18px 20px;
+            margin-bottom: 16px;
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+        }
+        .panel-title {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            color: #303133;
+            border-left: 3px solid #409eff;
+            padding-left: 10px;
+        }
+        .control-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 16px;
+            align-items: flex-end;
+        }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group label { font-size: 13px; color: #606266; }
+        .form-group select,
+        .form-group input {
+            padding: 8px 12px;
+            border: 1px solid #dcdfe6;
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 160px;
+            outline: none;
+        }
+        .form-group select:focus,
+        .form-group input:focus { border-color: #409eff; }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.88; }
+        .btn-primary { background: #409eff; color: #fff; }
+        .btn-success { background: #67c23a; color: #fff; }
+        .btn-warning { background: #e6a23c; color: #fff; }
+        .btn-danger { background: #f56c6c; color: #fff; }
+        .btn-default { background: #fff; color: #606266; border: 1px solid #dcdfe6; }
+        .btn-group { display: flex; flex-wrap: wrap; gap: 8px; }
+        .toolbar { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; }
+        .toolbar-left, .toolbar-right { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .table-wrap {
+            overflow: auto;
+            max-height: calc(100vh - 340px);
+            min-height: 200px;
+            border: 1px solid #ebeef5;
+            border-radius: 4px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        th, td {
+            border: 1px solid #ebeef5;
+            padding: 8px 10px;
+            text-align: center;
+            white-space: nowrap;
+        }
+        th {
+            background: #f5f7fa;
+            color: #606266;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+        tr:hover td { background: #fafcff; }
+        td input {
+            width: 100%;
+            min-width: 90px;
+            padding: 4px 6px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            text-align: center;
+            font-size: 13px;
+            background: transparent;
+        }
+        td input:focus {
+            border-color: #409eff;
+            background: #fff;
+            outline: none;
+        }
+        .col-index { width: 50px; color: #909399; }
+        .col-action { width: 60px; }
+        .result-cell { color: #409eff; font-family: Consolas, monospace; }
+        .result-cell.error { color: #f56c6c; }
+        .status-bar {
+            margin-top: 12px;
+            font-size: 13px;
+            color: #909399;
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .status-bar .count { color: #409eff; font-weight: 600; }
+        .hint {
+            font-size: 12px;
+            color: #909399;
+            line-height: 1.7;
+            margin-top: 10px;
+        }
+        .hint code {
+            background: #f5f7fa;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+        .single-convert {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: flex-end;
+        }
+        .single-result {
+            margin-top: 12px;
+            padding: 12px 14px;
+            background: #f5f7fa;
+            border-radius: 4px;
+            font-size: 13px;
+            display: none;
+        }
+        .single-result.show { display: block; }
+        .single-result .item { margin-bottom: 4px; }
+        .single-result .label { color: #909399; margin-right: 8px; }
+        .single-result .value { font-family: Consolas, monospace; color: #303133; }
+        .tabs { display: flex; gap: 0; margin-bottom: 16px; }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: #e8eef5;
+            color: #606266;
+            border: none;
+            font-size: 14px;
+            border-radius: 6px 6px 0 0;
+        }
+        .tab.active { background: #fff; color: #409eff; font-weight: 600; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .file-input { display: none; }
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(48, 49, 51, 0.92);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 4px;
+            font-size: 14px;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+        .precision-select { min-width: 100px !important; }
+        .input-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        @media (max-width: 900px) {
+            .input-layout { grid-template-columns: 1fr; }
+        }
+        .coord-textarea {
+            width: 100%;
+            min-height: 220px;
+            padding: 12px 14px;
+            border: 1px solid #dcdfe6;
+            border-radius: 4px;
+            font-size: 14px;
+            font-family: Consolas, 'Courier New', monospace;
+            line-height: 1.7;
+            resize: vertical;
+            outline: none;
+        }
+        .coord-textarea:focus { border-color: #409eff; }
+        .coord-textarea::placeholder { color: #c0c4cc; font-family: 'Microsoft YaHei', sans-serif; }
+        .input-panel-label {
+            font-size: 13px;
+            color: #606266;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .line-count { font-size: 12px; color: #909399; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>坐标转换工具</h1>
+        <p>基于 gcoord，支持 WGS84、高德 GCJ02、百度 BD09、百度墨卡托、Web 墨卡托 等坐标系互转</p>
+    </div>
+
+    <div class="container">
+        <div class="panel">
+            <div class="panel-title">转换设置</div>
+            <div class="control-row">
+                <div class="form-group">
+                    <label>输入坐标系</label>
+                    <select id="input-crs"></select>
+                </div>
+                <div class="form-group">
+                    <label>输出坐标系</label>
+                    <select id="output-crs"></select>
+                </div>
+                <div class="form-group">
+                    <label>小数位数</label>
+                    <select id="precision" class="precision-select">
+                        <option value="4">4 位</option>
+                        <option value="6" selected>6 位</option>
+                        <option value="8">8 位</option>
+                        <option value="10">10 位</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary" onclick="convertAll()">转换</button>
+            </div>
+            <div class="hint">
+                每行一对坐标，经纬度之间用<strong>空格</strong>、<strong>英文逗号</strong>或<strong>中文逗号</strong>分隔。
+                输出选「全部坐标系」时，将同时输出 WGS84、GCJ02、BD09、BD09MC、EPSG3857 五种结果。
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="input-layout">
+                <div>
+                    <div class="input-panel-label">
+                        <span>输入坐标</span>
+                        <span class="line-count" id="input-line-count">0 行</span>
+                    </div>
+                    <textarea id="coord-input" class="coord-textarea" placeholder="每行一对坐标，例如：&#10;116.397428 39.90923&#10;116.404 39.915, 116.5，39.6" oninput="updateInputLineCount()"></textarea>
+                    <div class="toolbar" style="margin-top: 10px;">
+                        <div class="toolbar-left">
+                            <button class="btn btn-primary" onclick="document.getElementById('file-csv').click()">导入 CSV</button>
+                            <button class="btn btn-primary" onclick="document.getElementById('file-xlsx').click()">导入 Excel</button>
+                            <button class="btn btn-default" onclick="clearInput()">清空输入</button>
+                            <input type="file" id="file-csv" class="file-input" accept=".csv,.txt" onchange="importFile(event, 'csv')">
+                            <input type="file" id="file-xlsx" class="file-input" accept=".xlsx,.xls" onchange="importFile(event, 'xlsx')">
+                        </div>
+                    </div>
+                </div>
+                <div>
+                    <div class="panel-title" style="margin-bottom: 8px;">格式示例</div>
+                    <div class="hint" style="margin-top: 0;">
+                        <p style="margin: 0 0 8px;">支持以下写法（每行一对）：</p>
+                        <code>116.397428 39.90923</code><br>
+                        <code>116.397428,39.90923</code><br>
+                        <code>116.397428，39.90923</code><br>
+                        <code>116.404 39.915</code>
+                        <p style="margin: 12px 0 0;">导入 CSV/Excel 时自动识别 <code>经度/lng</code>、<code>纬度/lat</code> 列，并填入文本框。</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel">
+            <div class="toolbar">
+                <div class="toolbar-left">
+                    <div class="panel-title" style="margin-bottom: 0; border: none; padding: 0;">转换结果</div>
+                </div>
+                <div class="toolbar-right">
+                    <button class="btn btn-success" onclick="exportCSV()">导出 CSV</button>
+                    <button class="btn btn-success" onclick="exportExcel()">导出 Excel</button>
+                    <button class="btn btn-default" onclick="copyResults()">复制结果</button>
+                </div>
+            </div>
+
+            <div class="table-wrap" style="margin-top: 14px;">
+                <table id="data-table">
+                    <thead id="table-head"></thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+            <div class="status-bar">
+                <span>共 <span class="count" id="row-count">0</span> 条数据</span>
+                <span id="convert-status"></span>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        const CRS_LIST = [
+            { key: 'WGS84', label: 'WGS84 (EPSG:4326)' },
+            { key: 'GCJ02', label: 'GCJ02 (高德/国测局)' },
+            { key: 'BD09', label: 'BD09 (百度经纬度)' },
+            { key: 'BD09MC', label: 'BD09MC (百度墨卡托)' },
+            { key: 'EPSG3857', label: 'EPSG:3857 (Web墨卡托)' }
+        ];
+
+        const ALL_OUTPUT = '__ALL__';
+        let rows = [];
+        let lastResults = [];
+
+        function initSelects() {
+            const inputCrs = document.getElementById('input-crs');
+            const outputCrs = document.getElementById('output-crs');
+
+            CRS_LIST.forEach(c => {
+                inputCrs.add(new Option(c.label, c.key));
+                outputCrs.add(new Option(c.label, c.key));
+            });
+            outputCrs.add(new Option('全部坐标系', ALL_OUTPUT));
+            inputCrs.value = 'WGS84';
+            outputCrs.value = 'GCJ02';
+
+            inputCrs.addEventListener('change', () => { if (rows.length) renderTable(); });
+            outputCrs.addEventListener('change', renderTable);
+        }
+
+        function parseCoordText(text) {
+            const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/);
+            const parsed = [];
+            lines.forEach((line, i) => {
+                const trimmed = line.trim();
+                if (!trimmed) return;
+                const parts = trimmed.split(/[\s,，]+/).filter(p => p !== '');
+                if (parts.length < 2) return;
+                const lng = parseFloat(parts[0]);
+                const lat = parseFloat(parts[1]);
+                if (isNaN(lng) || isNaN(lat)) return;
+                parsed.push({ name: '', lng: String(lng), lat: String(lat), results: {}, lineNum: i + 1 });
+            });
+            return parsed;
+        }
+
+        function rowsToText(data) {
+            return data.map(r => `${r.lng} ${r.lat}`).join('\n');
+        }
+
+        function updateInputLineCount() {
+            const count = parseCoordText(document.getElementById('coord-input').value).length;
+            document.getElementById('input-line-count').textContent = count + ' 行';
+        }
+
+        function clearInput() {
+            document.getElementById('coord-input').value = '';
+            rows = [];
+            lastResults = [];
+            updateInputLineCount();
+            renderTable();
+            document.getElementById('convert-status').textContent = '';
+        }
+
+        function appendToTextarea(data) {
+            const ta = document.getElementById('coord-input');
+            const text = rowsToText(data);
+            ta.value = ta.value.trim() ? ta.value.trim() + '\n' + text : text;
+            updateInputLineCount();
+        }
+
+        function showToast(msg) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.classList.add('show');
+            setTimeout(() => el.classList.remove('show'), 2500);
+        }
+
+        function convertAll() {
+            rows = parseCoordText(document.getElementById('coord-input').value);
+            if (!rows.length) {
+                showToast('请输入有效坐标');
+                renderTable();
+                return;
+            }
+
+            const fromCrs = document.getElementById('input-crs').value;
+            const toCrs = document.getElementById('output-crs').value;
+            const precision = getPrecision();
+            let ok = 0, fail = 0;
+            lastResults = [];
+
+            rows.forEach((row, i) => {
+                const lng = parseFloat(row.lng);
+                const lat = parseFloat(row.lat);
+                if (isNaN(lng) || isNaN(lat)) {
+                    row.results = { error: '坐标无效' };
+                    fail++;
+                    lastResults.push(null);
+                    return;
+                }
+                try {
+                    if (toCrs === ALL_OUTPUT) {
+                        row.results = convertToAll(lng, lat, fromCrs);
+                    } else {
+                        const [outLng, outLat] = convertPoint(lng, lat, fromCrs, toCrs);
+                        row.results = { [toCrs]: [outLng, outLat] };
+                    }
+                    lastResults.push(row.results);
+                    ok++;
+                } catch (e) {
+                    row.results = { error: e.message || '转换失败' };
+                    fail++;
+                    lastResults.push(null);
+                }
+            });
+
+            renderTable();
+            document.getElementById('convert-status').textContent =
+                `转换完成：成功 ${ok} 条，失败 ${fail} 条（精度 ${precision} 位小数）`;
+        }
+
+        function getPrecision() {
+            return parseInt(document.getElementById('precision').value, 10);
+        }
+
+        function formatNum(n, precision) {
+            if (n === null || n === undefined || isNaN(n)) return '';
+            return Number(n).toFixed(precision);
+        }
+
+        function convertPoint(lng, lat, fromCrs, toCrs) {
+            return gcoord.transform([Number(lng), Number(lat)], fromCrs, toCrs);
+        }
+
+        function convertToAll(lng, lat, fromCrs) {
+            const results = {};
+            CRS_LIST.forEach(c => {
+                if (c.key === fromCrs) {
+                    results[c.key] = [Number(lng), Number(lat)];
+                } else {
+                    results[c.key] = convertPoint(lng, lat, fromCrs, c.key);
+                }
+            });
+            return results;
+        }
+
+        function renderTable() {
+            const fromCrs = document.getElementById('input-crs').value;
+            const toCrs = document.getElementById('output-crs').value;
+            const precision = getPrecision();
+            const thead = document.getElementById('table-head');
+            const tbody = document.getElementById('table-body');
+
+            let headHtml = '<tr><th class="col-index">#</th><th>输入经度</th><th>输入纬度</th>';
+            if (toCrs === ALL_OUTPUT) {
+                CRS_LIST.forEach(c => {
+                    headHtml += `<th>${c.label} 经度</th><th>${c.label} 纬度</th>`;
+                });
+            } else {
+                const label = CRS_LIST.find(c => c.key === toCrs)?.label || toCrs;
+                headHtml += `<th>${label} 经度</th><th>${label} 纬度</th>`;
+            }
+            headHtml += '</tr>';
+            thead.innerHTML = headHtml;
+
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="99" style="color:#c0c4cc;padding:40px">在上方文本框输入坐标后点击「转换」</td></tr>';
+                document.getElementById('row-count').textContent = '0';
+                return;
+            }
+
+            tbody.innerHTML = rows.map((row, i) => {
+                let resultHtml = '';
+                if (row.results?.error) {
+                    const colspan = toCrs === ALL_OUTPUT ? CRS_LIST.length * 2 : 2;
+                    resultHtml = `<td colspan="${colspan}" class="result-cell error">${row.results.error}</td>`;
+                } else if (row.results && Object.keys(row.results).length) {
+                    if (toCrs === ALL_OUTPUT) {
+                        CRS_LIST.forEach(c => {
+                            const r = row.results[c.key];
+                            if (r) {
+                                resultHtml += `<td class="result-cell">${formatNum(r[0], precision)}</td>`;
+                                resultHtml += `<td class="result-cell">${formatNum(r[1], precision)}</td>`;
+                            } else {
+                                resultHtml += '<td></td><td></td>';
+                            }
+                        });
+                    } else {
+                        const r = row.results[toCrs];
+                        if (r) {
+                            resultHtml += `<td class="result-cell">${formatNum(r[0], precision)}</td>`;
+                            resultHtml += `<td class="result-cell">${formatNum(r[1], precision)}</td>`;
+                        } else {
+                            resultHtml += '<td></td><td></td>';
+                        }
+                    }
+                } else {
+                    const emptyCols = toCrs === ALL_OUTPUT ? CRS_LIST.length * 2 : 2;
+                    resultHtml = Array(emptyCols).fill('<td></td>').join('');
+                }
+
+                return `<tr>
+                    <td class="col-index">${i + 1}</td>
+                    <td>${row.lng}</td>
+                    <td>${row.lat}</td>
+                    ${resultHtml}
+                </tr>`;
+            }).join('');
+
+            document.getElementById('row-count').textContent = rows.length;
+        }
+
+        const LNG_KEYS = ['经度', 'lng', 'lon', 'longitude', 'x', 'lng_wgs84', 'lng_gcj02', 'lng_bd09'];
+        const LAT_KEYS = ['纬度', 'lat', 'latitude', 'y', 'lat_wgs84', 'lat_gcj02', 'lat_bd09'];
+        const NAME_KEYS = ['名称', 'name', '点名', '地点', 'address', '地址'];
+
+        function normalizeKey(k) {
+            return String(k).trim().toLowerCase().replace(/[\s_-]/g, '');
+        }
+
+        function detectColumns(headers) {
+            const norm = headers.map(h => normalizeKey(h));
+            let lngIdx = -1, latIdx = -1, nameIdx = -1;
+
+            headers.forEach((h, i) => {
+                const n = normalizeKey(h);
+                if (LNG_KEYS.some(k => normalizeKey(k) === n || n.includes('lng') || n.includes('lon') || n === 'x' || n.includes('经度'))) {
+                    if (lngIdx === -1) lngIdx = i;
+                }
+                if (LAT_KEYS.some(k => normalizeKey(k) === n || n.includes('lat') || n === 'y' || n.includes('纬度'))) {
+                    if (latIdx === -1) latIdx = i;
+                }
+                if (NAME_KEYS.some(k => normalizeKey(k) === n || n.includes('name') || n.includes('名称') || n.includes('地址'))) {
+                    if (nameIdx === -1) nameIdx = i;
+                }
+            });
+
+            if (lngIdx === -1 && headers.length >= 2) lngIdx = 0;
+            if (latIdx === -1 && headers.length >= 2) latIdx = 1;
+
+            return { lngIdx, latIdx, nameIdx };
+        }
+
+        function parseCSV(text) {
+            const lines = text.replace(/^\uFEFF/, '').split(/\r?\n/).filter(l => l.trim());
+            if (!lines.length) return [];
+
+            const delimiter = lines[0].includes('\t') ? '\t' : (lines[0].split(';').length > lines[0].split(',').length ? ';' : ',');
+            const parseLine = (line) => {
+                const result = [];
+                let cur = '', inQuote = false;
+                for (let i = 0; i < line.length; i++) {
+                    const ch = line[i];
+                    if (ch === '"') {
+                        inQuote = !inQuote;
+                    } else if (ch === delimiter && !inQuote) {
+                        result.push(cur.trim());
+                        cur = '';
+                    } else {
+                        cur += ch;
+                    }
+                }
+                result.push(cur.trim());
+                return result;
+            };
+
+            const first = parseLine(lines[0]);
+            const hasHeader = first.some(cell => isNaN(parseFloat(cell)) && cell !== '');
+            let startIdx = 0;
+            let lngIdx = 0, latIdx = 1, nameIdx = -1;
+
+            if (hasHeader) {
+                const cols = detectColumns(first);
+                lngIdx = cols.lngIdx;
+                latIdx = cols.latIdx;
+                nameIdx = cols.nameIdx;
+                startIdx = 1;
+            }
+
+            const imported = [];
+            for (let i = startIdx; i < lines.length; i++) {
+                const cells = parseLine(lines[i]);
+                if (!cells.length) continue;
+                const lng = cells[lngIdx];
+                const lat = cells[latIdx];
+                if (lng === undefined || lat === undefined) continue;
+                if (isNaN(parseFloat(lng)) || isNaN(parseFloat(lat))) continue;
+                imported.push({
+                    name: nameIdx >= 0 ? (cells[nameIdx] || '') : '',
+                    lng: String(lng),
+                    lat: String(lat),
+                    results: {}
+                });
+            }
+            return imported;
+        }
+
+        function parseSheetData(sheet) {
+            const data = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+            if (!data.length) return [];
+
+            const first = data[0].map(String);
+            const hasHeader = first.some(cell => isNaN(parseFloat(cell)) && cell.trim() !== '');
+            let startIdx = 0;
+            let lngIdx = 0, latIdx = 1, nameIdx = -1;
+
+            if (hasHeader) {
+                const cols = detectColumns(first);
+                lngIdx = cols.lngIdx;
+                latIdx = cols.latIdx;
+                nameIdx = cols.nameIdx;
+                startIdx = 1;
+            }
+
+            const imported = [];
+            for (let i = startIdx; i < data.length; i++) {
+                const row = data[i];
+                if (!row || !row.length) continue;
+                const lng = row[lngIdx];
+                const lat = row[latIdx];
+                if (lng === '' || lat === '' || isNaN(parseFloat(lng)) || isNaN(parseFloat(lat))) continue;
+                imported.push({
+                    name: nameIdx >= 0 ? String(row[nameIdx] || '') : '',
+                    lng: String(lng),
+                    lat: String(lat),
+                    results: {}
+                });
+            }
+            return imported;
+        }
+
+        function importFile(event, type) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+
+            reader.onload = (e) => {
+                try {
+                    let imported = [];
+                    if (type === 'csv') {
+                        imported = parseCSV(e.target.result);
+                    } else {
+                        const wb = XLSX.read(e.target.result, { type: 'array' });
+                        const sheet = wb.Sheets[wb.SheetNames[0]];
+                        imported = parseSheetData(sheet);
+                    }
+                    if (!imported.length) {
+                        showToast('未识别到有效坐标数据');
+                        return;
+                    }
+                    appendToTextarea(imported);
+                    showToast(`成功导入 ${imported.length} 条坐标`);
+                } catch (err) {
+                    showToast('导入失败：' + err.message);
+                }
+                event.target.value = '';
+            };
+
+            if (type === 'csv') {
+                reader.readAsText(file, 'UTF-8');
+            } else {
+                reader.readAsArrayBuffer(file);
+            }
+        }
+
+        function buildExportData() {
+            if (!rows.length) rows = parseCoordText(document.getElementById('coord-input').value);
+            const fromCrs = document.getElementById('input-crs').value;
+            const toCrs = document.getElementById('output-crs').value;
+            const precision = getPrecision();
+            const fromLabel = CRS_LIST.find(c => c.key === fromCrs)?.label || fromCrs;
+
+            const headers = ['序号', `输入经度(${fromLabel})`, `输入纬度(${fromLabel})`];
+            if (toCrs === ALL_OUTPUT) {
+                CRS_LIST.forEach(c => {
+                    headers.push(`${c.label}经度`, `${c.label}纬度`);
+                });
+            } else {
+                const label = CRS_LIST.find(c => c.key === toCrs)?.label || toCrs;
+                headers.push(`${label}经度`, `${label}纬度`);
+            }
+
+            const data = [headers];
+            rows.forEach((row, i) => {
+                const line = [i + 1, row.lng, row.lat];
+                if (row.results?.error) {
+                    line.push(row.results.error);
+                } else if (toCrs === ALL_OUTPUT && row.results) {
+                    CRS_LIST.forEach(c => {
+                        const r = row.results[c.key];
+                        line.push(r ? formatNum(r[0], precision) : '', r ? formatNum(r[1], precision) : '');
+                    });
+                } else if (row.results?.[toCrs]) {
+                    const r = row.results[toCrs];
+                    line.push(formatNum(r[0], precision), formatNum(r[1], precision));
+                } else {
+                    line.push('', '');
+                }
+                data.push(line);
+            });
+            return data;
+        }
+
+        function exportCSV() {
+            if (!rows.length) rows = parseCoordText(document.getElementById('coord-input').value);
+            if (!rows.length) {
+                showToast('没有可导出的数据');
+                return;
+            }
+            const data = buildExportData();
+            const csv = data.map(row =>
+                row.map(cell => {
+                    const s = String(cell ?? '');
+                    return s.includes(',') || s.includes('"') || s.includes('\n')
+                        ? '"' + s.replace(/"/g, '""') + '"'
+                        : s;
+                }).join(',')
+            ).join('\n');
+
+            downloadBlob('\uFEFF' + csv, 'coordinate_convert.csv', 'text/csv;charset=utf-8');
+            showToast('CSV 导出成功');
+        }
+
+        function exportExcel() {
+            if (!rows.length) rows = parseCoordText(document.getElementById('coord-input').value);
+            if (!rows.length) {
+                showToast('没有可导出的数据');
+                return;
+            }
+            const data = buildExportData();
+            const ws = XLSX.utils.aoa_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, '坐标转换');
+            XLSX.writeFile(wb, 'coordinate_convert.xlsx');
+            showToast('Excel 导出成功');
+        }
+
+        function copyResults() {
+            if (!rows.length) rows = parseCoordText(document.getElementById('coord-input').value);
+            if (!rows.length) {
+                showToast('没有可复制的数据');
+                return;
+            }
+            const data = buildExportData();
+            const text = data.map(row => row.join('\t')).join('\n');
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('结果已复制到剪贴板');
+            }).catch(() => showToast('复制失败'));
+        }
+
+        function downloadBlob(content, filename, mime) {
+            const blob = new Blob([content], { type: mime });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        initSelects();
+        document.getElementById('coord-input').value = '116.397428 39.90923\n116.404 39.915\n116.5，39.6';
+        updateInputLineCount();
+        renderTable();
+    </script>
+</body>
+</html>

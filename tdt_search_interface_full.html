@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>天地图企业搜索</title>
+  
+    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.css">
+</head>
+<body style="margin:0;padding:0;display:flex;height:100vh;font-family:'Microsoft YaHei',Arial,sans-serif;">
+    <div id="map" style="flex:1;height:100%;position:relative;"></div>
+    <div id="search-panel" style="width:400px;background:#fff;border-left:1px solid #ddd;padding:20px;display:flex;flex-direction:column;box-shadow:-2px 0 10px rgba(0,0,0,0.1);overflow-y:hidden;">
+        <h3 style="margin-bottom:15px;color:#333;font-size:16px;border-bottom:1px solid #eee;padding-bottom:10px;">企业名称搜索</h3>
+        <textarea id="company-names" placeholder="输入企业名称，多个用逗号隔开&#10;&#10;支持中文逗号和英文逗号&#10;&#10;例如：陕西环信，华为技术有限公司，西安比亚迪" style="width:95%;height:100px;padding:10px;border:1px solid #ccc;border-radius:4px;resize:none;font-size:14px;margin-bottom:15px;outline:none;"></textarea>
+        <div style="margin-bottom:15px;">
+            <label style="margin-right:15px;cursor:pointer;">
+                <input type="radio" name="search-mode" value="one" checked onchange="changeSearchMode()"> 单个（第一条）
+            </label>
+            <label style="cursor:pointer;">
+                <input type="radio" name="search-mode" value="all" onchange="changeSearchMode()"> 全部（所有结果）
+            </label>
+            <input type="number" id="page-count" value="10" min="1" max="100" style="width:60px;margin-left:10px;padding:4px;border:1px solid #ccc;border-radius:3px;font-size:13px;display:none;" placeholder="条数">
+        </div>
+        <div style="display:flex;gap:10px;margin-bottom:15px;">
+            <button onclick="searchCompanies()" id="search-btn" style="flex:1;padding:10px;border:none;border-radius:4px;cursor:pointer;font-size:14px;background:#409eff;color:#fff;">查询</button>
+            <button onclick="exportToCSV()" id="export-btn" disabled style="flex:1;padding:10px;border:none;border-radius:4px;cursor:pointer;font-size:14px;background:#67c23a;color:#fff;">导出 CSV</button>
+        </div>
+        <div id="progress" style="font-size:13px;color:#666;min-height:60px;max-height:100px;border:1px solid #eee;border-radius:4px;padding:10px;overflow-y:auto;margin-bottom:15px;"></div>
+        <h3 style="margin-top:0;color:#333;font-size:16px;">查询结果</h3>
+        <div id="result-list" style="flex:1;border:1px solid #eee;border-radius:4px;overflow-y:auto;max-height:400px;"></div>
+        <div id="pagination" style="display:none;margin-top:10px;text-align:center;">
+            <button onclick="prevPage()" id="prev-btn" style="padding:5px 10px;margin:0 5px;border:1px solid #ddd;background:#fff;cursor:pointer;border-radius:3px;">上一页</button>
+            <span id="page-info" style="margin:0 10px;">第 1 页 / 共 1 页</span>
+            <button onclick="nextPage()" id="next-btn" style="padding:5px 10px;margin:0 5px;border:1px solid #ddd;background:#fff;cursor:pointer;border-radius:3px;">下一页</button>
+        </div>
+        <div style="font-size:12px;color:#999;margin-top:10px;">提示：点击列表项可定位到地图上的点位</div>
+    </div>
+    <div id="popup" style="position:absolute;background:white;padding:15px;border-radius:6px;box-shadow:0 2px 12px rgba(0,0,0,0.15);max-width:280px;z-index:1000;display:none;">
+        <div onclick="closePopup()" style="position:absolute;top:8px;right:10px;width:20px;height:20px;line-height:18px;text-align:center;border-radius:50%;background:#f5f5f5;cursor:pointer;font-size:14px;color:#999;">×</div>
+        <div id="popup-title" style="font-weight:bold;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #eee;font-size:14px;color:#333;"></div>
+        <div id="popup-content" style="font-size:13px;color:#666;line-height:1.6;"></div>
+    </div>
+
+    <script>
+        const TD_KEY = '6620871c00d70bb3350902f4a65bcede';
+        let searchResults = [];
+        let allResults = [];
+        let searchMode = 'one';
+        let currentPage = 1;
+        let pageSize = 20;
+        let totalPages = 1;
+        let map = null;
+        let markerLayer = null;
+        let selectedFeature = null;
+
+
+
+        function initMap() {
+            const view = new ol.View({
+                projection: 'EPSG:4326',
+                center: [108.95, 35.6],
+                zoom: 7,
+                maxZoom: 18,
+                minZoom: 6
+            });
+
+            const tdtBase = new ol.layer.Tile({
+                source: new ol.source.XYZ({
+                    crossOrigin: 'Anonymous',
+                    tileUrlFunction: function(tileCoord) {
+                        const z = tileCoord[0];
+                        const x = tileCoord[1];
+                        const y = tileCoord[2];
+                        return `https://t0.tianditu.gov.cn/vec_c/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=vec&STYLE=default&TILEMATRIXSET=c&FORMAT=tiles&TILEMATRIX=${z}&TILEROW=${y}&TILECOL=${x}&tk=${TD_KEY}`;
+                    },
+                    projection: 'EPSG:4326'
+                })
+            });
+
+            const tdtLabel = new ol.layer.Tile({
+                source: new ol.source.XYZ({
+                    crossOrigin: 'Anonymous',
+                    tileUrlFunction: function(tileCoord) {
+                        const z = tileCoord[0];
+                        const x = tileCoord[1];
+                        const y = tileCoord[2];
+                        return `https://t0.tianditu.gov.cn/cva_c/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cva&STYLE=default&TILEMATRIXSET=c&FORMAT=tiles&TILEMATRIX=${z}&TILEROW=${y}&TILECOL=${x}&tk=${TD_KEY}`;
+                    },
+                    projection: 'EPSG:4326'
+                })
+            });
+
+            const markerSource = new ol.source.Vector();
+            markerLayer = new ol.layer.Vector({
+                source: markerSource,
+                style: function(feature) {
+                    const isSelected = feature.get('selected');
+                    return new ol.style.Style({
+                        image: new ol.style.Icon({
+                            src: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"%3E%3Cpath d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/%3E%3Ccircle cx="12" cy="10" r="3"/%3E%3C/svg%3E',
+                            anchor: [0.5, 1],
+                            scale: isSelected ? 1.3 : 1.1,
+                            color: isSelected ? '#f56c6c' : '#409eff'
+                        })
+                    });
+                }
+            });
+
+            map = new ol.Map({
+                target: 'map',
+                layers: [tdtBase, tdtLabel, markerLayer],
+                view: view,
+                controls: []
+            });
+
+            map.on('click', function(e) {
+                map.forEachFeatureAtPixel(e.pixel, function(feature) {
+                    showPopup(feature, e.coordinate);
+                    return true;
+                });
+            });
+
+            map.on('click', function(e) {
+                const features = map.getFeaturesAtPixel(e.pixel);
+                if (!features || features.length === 0) {
+                    closePopup();
+                }
+            });
+
+            return map;
+        }
+
+        function changeSearchMode() {
+            const radios = document.getElementsByName('search-mode');
+            const countInput = document.getElementById('page-count');
+            for (let i = 0; i < radios.length; i++) {
+                if (radios[i].checked) {
+                    searchMode = radios[i].value;
+                    if (searchMode === 'all') {
+                        countInput.style.display = 'inline-block';
+                    } else {
+                        countInput.style.display = 'none';
+                    }
+                    break;
+                }
+            }
+        }
+
+        async function fetchTdtAPI(keyWord, count = 10) {
+            const url = 'https://api.tianditu.gov.cn/v2/search';
+            const postData = {
+                keyWord: keyWord,
+                queryType: 12,
+                start: 0,
+                count: count,
+                specify: '156610000',
+                show:2
+            };
+
+            const postStr = encodeURIComponent(JSON.stringify(postData));
+            const fullUrl = `${url}?postStr=${postStr}&type=query&tk=${TD_KEY}`;
+
+            try {
+                const response = await fetch(fullUrl);
+                const data = await response.json();
+
+                if (data.status && data.status.infocode === 1000) {
+                    if (data.pois && data.pois.length > 0) {
+                        if (searchMode === 'one') {
+                            const firstPoi = data.pois[0];
+                            const lonlat = firstPoi.lonlat.split(',');
+                            return {
+                                company_name: keyWord,
+                                lng: lonlat[0] || '',
+                                lat: lonlat[1] || '',
+                                name: firstPoi.name || '',
+                                address: firstPoi.address || ''
+                            };
+                        } else {
+                            const results = [];
+                            data.pois.forEach(poi => {
+                                const lonlat = poi.lonlat.split(',');
+                                results.push({
+                                    company_name: keyWord,
+                                    lng: lonlat[0] || '',
+                                    lat: lonlat[1] || '',
+                                    name: poi.name || '',
+                                    address: poi.address || '',
+                                    phone: poi.phone || '',
+                                    poiType: poi.poiType || ''
+                                });
+                            });
+                            return results;
+                        }
+                    } else {
+                        return searchMode === 'one' ? {
+                            company_name: keyWord,
+                            lng: '',
+                            lat: '',
+                            name: '',
+                            address: '未找到相关结果'
+                        } : [];
+                    }
+                } else {
+                    return searchMode === 'one' ? {
+                        company_name: keyWord,
+                        lng: '',
+                        lat: '',
+                        name: '',
+                        address: '搜索失败：' + (data.status?.cndesc || '未知错误')
+                    } : [];
+                }
+            } catch (error) {
+                console.error('搜索失败:', error);
+                return searchMode === 'one' ? {
+                    company_name: keyWord,
+                    lng: '',
+                    lat: '',
+                    name: '',
+                    address: '网络错误：' + error.message
+                } : [];
+            }
+        }
+
+        async function searchCompanies() {
+            const input = document.getElementById('company-names').value.trim();
+            const searchBtn = document.getElementById('search-btn');
+            const exportBtn = document.getElementById('export-btn');
+            const progress = document.getElementById('progress');
+            const countInput = document.getElementById('page-count');
+            const count = searchMode === 'one' ? 1 : (parseInt(countInput.value) || 10);
+
+            if (!input) {
+                alert('请输入企业名称');
+                return;
+            }
+
+            const names = input.split(/[,，\n\r]+/).map(n => n.trim()).filter(n => n);
+
+            if (names.length === 0) {
+                alert('请输入有效的企业名称');
+                return;
+            }
+
+            searchResults = [];
+            allResults = [];
+            progress.innerHTML = '<p style="color:#909399;">开始搜索...</p>';
+            searchBtn.disabled = true;
+            exportBtn.disabled = true;
+
+            for (let i = 0; i < names.length; i++) {
+                const name = names[i];
+                progress.innerHTML += `<p style="color:#909399;">正在搜索：${name} (${i + 1}/${names.length})</p>`;
+
+                const result = await fetchTdtAPI(name, count);
+
+                if (searchMode === 'all' && Array.isArray(result)) {
+                    allResults.push(...result);
+                    if (result.length > 0) {
+                        progress.innerHTML += `<p style="color:#67c23a;">✓ ${name}: 找到${result.length}条结果</p>`;
+                    } else {
+                        progress.innerHTML += `<p style="color:#f56c6c;">✗ ${name}: 未找到结果</p>`;
+                    }
+                } else {
+                    searchResults.push(result);
+                    if (result.lng && result.lat) {
+                        progress.innerHTML += `<p style="color:#67c23a;">✓ ${name}: ${result.name}</p>`;
+                    } else {
+                        progress.innerHTML += `<p style="color:#f56c6c;">✗ ${name}: ${result.address}</p>`;
+                    }
+                }
+
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            if (searchMode === 'all') {
+                searchResults = allResults;
+            }
+
+            currentPage = 1;
+            renderResultList(searchResults);
+            addMarkers(searchResults);
+            updatePagination();
+
+            progress.innerHTML += '<p style="color:#67c23a;">搜索完成！</p>';
+            searchBtn.disabled = false;
+            exportBtn.disabled = false;
+        }
+
+        function renderResultList(results) {
+            const listEl = document.getElementById('result-list');
+
+            if (!results || results.length === 0) {
+                listEl.innerHTML = '<div style="text-align:center;color:#999;padding:40px 20px;font-size:14px;">暂无数据</div>';
+                return;
+            }
+
+            const start = (currentPage - 1) * pageSize;
+            const end = start + pageSize;
+            const pageData = results.slice(start, end);
+
+            let html = '';
+            pageData.forEach((result, index) => {
+                const hasCoords = result.lng && result.lat;
+                const actualIndex = start + index;
+                html += `<div class="list-item ${hasCoords ? 'found' : 'not-found'}" onclick="handleListItemClick(${actualIndex})" style="padding:12px;border-bottom:1px solid #f5f5f5;cursor:pointer;${hasCoords ? 'border-left:3px solid #67c23a' : 'border-left:3px solid #f56c6c;opacity:0.7'};">
+                    <div style="font-weight:bold;color:#333;margin-bottom:4px;">${result.name || result.company_name}</div>
+                    <div style="font-size:12px;color:#666;margin-bottom:4px;">${result.address || '-'}</div>
+                    <div style="font-size:11px;color:#999;">${hasCoords ? result.lng + ', ' + result.lat : '无坐标'}</div>
+                </div>`;
+            });
+
+            listEl.innerHTML = html;
+            updatePagination();
+        }
+
+        function updatePagination() {
+            totalPages = Math.ceil(searchResults.length / pageSize);
+            const paginationEl = document.getElementById('pagination');
+            const pageInfoEl = document.getElementById('page-info');
+            const prevBtn = document.getElementById('prev-btn');
+            const nextBtn = document.getElementById('next-btn');
+
+            if (totalPages > 1) {
+                paginationEl.style.display = 'block';
+                pageInfoEl.textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页`;
+                prevBtn.disabled = currentPage === 1;
+                nextBtn.disabled = currentPage === totalPages;
+            } else {
+                paginationEl.style.display = 'none';
+            }
+        }
+
+        function prevPage() {
+            if (currentPage > 1) {
+                currentPage--;
+                renderResultList(searchResults);
+            }
+        }
+
+        function nextPage() {
+            if (currentPage < totalPages) {
+                currentPage++;
+                renderResultList(searchResults);
+            }
+        }
+
+        function handleListItemClick(index) {
+            const result = searchResults[index];
+            if (!result || !result.lng || !result.lat) return;
+
+            const features = markerLayer.getSource().getFeatures();
+            for (let i = 0; i < features.length; i++) {
+                const feature = features[i];
+                if (feature.get('company_name') === result.company_name && feature.get('name') === result.name) {
+                    zoomToFeature(feature);
+                    break;
+                }
+            }
+        }
+
+        function addMarkers(results) {
+            if (markerLayer) {
+                markerLayer.getSource().clear();
+            }
+
+            const features = [];
+            results.forEach(result => {
+                if (result.lng && result.lat) {
+                    const point = new ol.geom.Point([parseFloat(result.lng), parseFloat(result.lat)]);
+                    const feature = new ol.Feature({
+                        geometry: point,
+                        company_name: result.company_name,
+                        name: result.name,
+                        address: result.address,
+                        lng: result.lng,
+                        lat: result.lat
+                    });
+                    features.push(feature);
+                }
+            });
+
+            if (markerLayer && features.length > 0) {
+                markerLayer.getSource().addFeatures(features);
+            }
+        }
+
+        function zoomToFeature(feature) {
+            if (!map || !feature) return;
+
+            const geometry = feature.getGeometry();
+            if (geometry) {
+                map.getView().animate({
+                    center: geometry.getCoordinates(),
+                    zoom: 16,
+                    duration: 500
+                });
+
+                if (selectedFeature) {
+                    selectedFeature.set('selected', false);
+                }
+                selectedFeature = feature;
+                feature.set('selected', true);
+                markerLayer.getSource().changed();
+            }
+        }
+
+        function showPopup(feature, coordinate) {
+            const popupEl = document.getElementById('popup');
+            const titleEl = document.getElementById('popup-title');
+            const contentEl = document.getElementById('popup-content');
+
+            if (!feature || !popupEl) return;
+
+            const props = feature.getProperties();
+            titleEl.textContent = props.name || props.company_name;
+            contentEl.innerHTML = `
+                <p><span style="color:#999;margin-right:5px;">搜索名称:</span>${props.company_name}</p>
+                <p><span style="color:#999;margin-right:5px;">名称:</span>${props.name || '-'}</p>
+                <p><span style="color:#999;margin-right:5px;">地址:</span>${props.address || '-'}</p>
+                <p><span style="color:#999;margin-right:5px;">坐标:</span>${props.lng}, ${props.lat}</p>
+            `;
+
+            const pixel = map.getPixelFromCoordinate(coordinate);
+            popupEl.style.left = (pixel[0] + 15) + 'px';
+            popupEl.style.top = (pixel[1] - 10) + 'px';
+            popupEl.style.display = 'block';
+        }
+
+        function closePopup() {
+            const popupEl = document.getElementById('popup');
+            if (popupEl) {
+                popupEl.style.display = 'none';
+            }
+        }
+
+        function exportToCSV() {
+            if (!searchResults || searchResults.length === 0) {
+                alert('没有数据可导出');
+                return;
+            }
+
+            const headers = ['搜索名称', '经度', '纬度', '名称', '地址', '电话', '类型'];
+            let csvContent = headers.join(',') + '\n';
+
+            searchResults.forEach(result => {
+                const row = [
+                    `"${result.company_name}"`,
+                    result.lng,
+                    result.lat,
+                    `"${result.name}"`,
+                    `"${result.address}"`,
+                    `"${result.phone || ''}"`,
+                    `"${result.poiType || ''}"`
+                ];
+                csvContent += row.join(',') + '\n';
+            });
+
+            const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+
+            link.setAttribute('href', url);
+            link.setAttribute('download', `tdt_search_results_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`);
+            link.style.visibility = 'hidden';
+
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        map = initMap();
+    </script>
+</body>
+</html>
