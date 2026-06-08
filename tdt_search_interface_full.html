@@ -4,42 +4,168 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>天地图企业搜索</title>
-  
     <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.css">
+    <script src="gcoord.global.prod.js"></script>
+    <style>
+        body { margin: 0; padding: 0; height: 100vh; font-family: 'Microsoft YaHei', Arial, sans-serif; overflow: hidden; }
+        #map { width: 100%; height: 100%; position: relative; }
+        #search-panel {
+            width: 400px; background: #fff; border-left: 1px solid #ddd; padding: 20px;
+            display: flex; flex-direction: column; box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+            overflow: hidden; transition: width 0.3s ease;
+            position: absolute; right: 0; top: 0; bottom: 0; z-index: 999;
+        }
+        #search-panel.collapsed { width: 0; padding: 0; border: none; box-shadow: none; overflow: visible; }
+        #toggle-panel {
+            position: absolute; top: 50%; transform: translateY(-50%);
+            width: 20px; height: 70px; background: #fff; border: 1px solid #ddd;
+            border-right: none; border-radius: 4px 0 0 4px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; color: #666; z-index: 1001;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+            transition: right 0.3s ease;
+        }
+        body.panel-open #toggle-panel { right: 440px; }
+        body:not(.panel-open) #toggle-panel { right: 0; }
+        #toggle-panel:hover { background: #f5f5f5; }
+        .panel-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; min-width: 360px; }
+        #search-panel.collapsed .panel-content { display: none; }
+        .panel-title { margin-bottom: 15px; color: #333; font-size: 16px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        #company-names { width: 95%; height: 100px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: none; font-size: 14px; margin-bottom: 15px; outline: none; }
+        .search-mode { margin-bottom: 15px; }
+        .search-mode label { margin-right: 15px; cursor: pointer; }
+        #page-count { width: 60px; margin-left: 10px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 13px; display: none; }
+        .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn-group button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        #search-btn { background: #409eff; color: #fff; }
+        #export-btn { background: #67c23a; color: #fff; }
+        #export-btn:disabled { background: #a8d88a; cursor: not-allowed; }
+        #progress { font-size: 13px; color: #666; min-height: 60px; max-height: 100px; border: 1px solid #eee; border-radius: 4px; padding: 10px; overflow-y: auto; margin-bottom: 15px; }
+        #result-list { flex: 1; border: 1px solid #eee; border-radius: 4px; overflow-y: auto; max-height: 400px; }
+        .list-item { padding: 12px; border-bottom: 1px solid #f5f5f5; cursor: pointer; }
+        .list-item.found { border-left: 3px solid #67c23a; }
+        .list-item.not-found { border-left: 3px solid #f56c6c; opacity: 0.7; }
+        #pagination { display: none; margin-top: 10px; text-align: center; }
+        #pagination button { padding: 5px 10px; margin: 0 5px; border: 1px solid #ddd; background: #fff; cursor: pointer; border-radius: 3px; }
+        #pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+        #page-info { margin: 0 10px; }
+        .hint { font-size: 12px; color: #999; margin-top: 10px; }
+        #popup { position: absolute; background: white; padding: 15px; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,0.15); max-width: 280px; z-index: 1000; display: none; }
+        #popup-close { position: absolute; top: 8px; right: 10px; width: 20px; height: 20px; line-height: 18px; text-align: center; border-radius: 50%; background: #f5f5f5; cursor: pointer; font-size: 14px; color: #999; }
+        #popup-title { font-weight: bold; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #eee; font-size: 14px; color: #333; padding-right: 20px; }
+        #popup-content { font-size: 13px; color: #666; line-height: 1.6; }
+        #toolbar { position: absolute; top: 10px; left: 10px; background: rgba(255,255,255,0.95); border-radius: 4px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; }
+        .tool-btn { display: block; width: 36px; height: 36px; line-height: 36px; text-align: center; margin-bottom: 5px; border: none; background: #fff; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        .tool-btn:hover { background: #f0f0f0; }
+        .tool-btn.active { background: #409eff; color: #fff; }
+        .tool-btn:last-child { margin-bottom: 0; }
+        #coord-input-panel { position: absolute; top: 10px; left: 60px; background: rgba(255,255,255,0.95); border-radius: 4px; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; display: none; }
+        #coord-input-panel.show { display: block; }
+        #coord-input-panel input { width: 150px; margin-bottom: 10px; padding: 5px; border: 1px solid #ccc; border-radius: 3px; display: block; }
+        #coord-input-panel button { padding: 6px 15px; background: #409eff; color: #fff; border: none; border-radius: 3px; cursor: pointer; margin-right: 10px; }
+        #coord-input-panel button:last-child { background: #909399; }
+        #pick-result-panel { position: absolute; top: 10px; left: 60px; background: rgba(255,255,255,0.95); border-radius: 4px; padding: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; display: none; }
+        #pick-result-panel.show { display: block; }
+        #pick-result-panel .result-item { margin-bottom: 8px; font-size: 13px; }
+        #pick-result-panel .result-label { color: #666; margin-right: 5px; }
+        #pick-result-panel .result-value { font-weight: bold; color: #333; font-family: Consolas, monospace; }
+        #pick-result-panel button { padding: 4px 12px; background: #409eff; color: #fff; border: none; border-radius: 3px; cursor: pointer; margin-right: 10px; font-size: 12px; }
+        #pick-result-panel button:last-child { background: #909399; }
+        #ranging-result { position: absolute; bottom: 20px; left: 10px; background: rgba(255,255,255,0.95); border-radius: 4px; padding: 10px 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; display: none; font-size: 13px; }
+        #ranging-result.show { display: block; }
+        #ranging-result button { margin-left: 15px; padding: 2px 8px; font-size: 12px; border: 1px solid #ddd; background: #fff; border-radius: 3px; cursor: pointer; }
+        #layer-control { position: absolute; top: 10px; background: rgba(255,255,255,0.95); border-radius: 4px; padding: 8px 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; transition: right 0.3s ease; }
+        body.panel-open #layer-control { right: 440px; }
+        body:not(.panel-open) #layer-control { right: 10px; }
+        #layer-control label { display: block; margin-bottom: 5px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+        #layer-control label:last-child { margin-bottom: 0; }
+        .ol-tooltip {
+            position: relative; background: rgba(0,0,0,0.7); color: #fff;
+            padding: 4px 8px; border-radius: 4px; font-size: 12px;
+            white-space: nowrap; pointer-events: none;
+        }
+        .ol-tooltip-measure { opacity: 1; }
+        .ol-tooltip-static { background: #ffcc33; color: #000; }
+    </style>
 </head>
-<body style="margin:0;padding:0;display:flex;height:100vh;font-family:'Microsoft YaHei',Arial,sans-serif;">
-    <div id="map" style="flex:1;height:100%;position:relative;"></div>
-    <div id="search-panel" style="width:400px;background:#fff;border-left:1px solid #ddd;padding:20px;display:flex;flex-direction:column;box-shadow:-2px 0 10px rgba(0,0,0,0.1);overflow-y:hidden;">
-        <h3 style="margin-bottom:15px;color:#333;font-size:16px;border-bottom:1px solid #eee;padding-bottom:10px;">企业名称搜索</h3>
-        <textarea id="company-names" placeholder="输入企业名称，多个用逗号隔开&#10;&#10;支持中文逗号和英文逗号&#10;&#10;例如：陕西环信，华为技术有限公司，西安比亚迪" style="width:95%;height:100px;padding:10px;border:1px solid #ccc;border-radius:4px;resize:none;font-size:14px;margin-bottom:15px;outline:none;"></textarea>
-        <div style="margin-bottom:15px;">
-            <label style="margin-right:15px;cursor:pointer;">
-                <input type="radio" name="search-mode" value="one" checked onchange="changeSearchMode()"> 单个（第一条）
-            </label>
-            <label style="cursor:pointer;">
-                <input type="radio" name="search-mode" value="all" onchange="changeSearchMode()"> 全部（所有结果）
-            </label>
-            <input type="number" id="page-count" value="10" min="1" max="100" style="width:60px;margin-left:10px;padding:4px;border:1px solid #ccc;border-radius:3px;font-size:13px;display:none;" placeholder="条数">
-        </div>
-        <div style="display:flex;gap:10px;margin-bottom:15px;">
-            <button onclick="searchCompanies()" id="search-btn" style="flex:1;padding:10px;border:none;border-radius:4px;cursor:pointer;font-size:14px;background:#409eff;color:#fff;">查询</button>
-            <button onclick="exportToCSV()" id="export-btn" disabled style="flex:1;padding:10px;border:none;border-radius:4px;cursor:pointer;font-size:14px;background:#67c23a;color:#fff;">导出 CSV</button>
-        </div>
-        <div id="progress" style="font-size:13px;color:#666;min-height:60px;max-height:100px;border:1px solid #eee;border-radius:4px;padding:10px;overflow-y:auto;margin-bottom:15px;"></div>
-        <h3 style="margin-top:0;color:#333;font-size:16px;">查询结果</h3>
-        <div id="result-list" style="flex:1;border:1px solid #eee;border-radius:4px;overflow-y:auto;max-height:400px;"></div>
-        <div id="pagination" style="display:none;margin-top:10px;text-align:center;">
-            <button onclick="prevPage()" id="prev-btn" style="padding:5px 10px;margin:0 5px;border:1px solid #ddd;background:#fff;cursor:pointer;border-radius:3px;">上一页</button>
-            <span id="page-info" style="margin:0 10px;">第 1 页 / 共 1 页</span>
-            <button onclick="nextPage()" id="next-btn" style="padding:5px 10px;margin:0 5px;border:1px solid #ddd;background:#fff;cursor:pointer;border-radius:3px;">下一页</button>
-        </div>
-        <div style="font-size:12px;color:#999;margin-top:10px;">提示：点击列表项可定位到地图上的点位</div>
+<body class="panel-open">
+    <div id="map"></div>
+
+    <div id="toolbar">
+        <button class="tool-btn" onclick="showCoordInput()" title="坐标定位">📍</button>
+        <button class="tool-btn" onclick="togglePickCoord()" title="拾取坐标" id="pick-btn">👆</button>
+        <button class="tool-btn" onclick="toggleRanging()" title="测距" id="ranging-btn">📏</button>
+        <button class="tool-btn" onclick="clearToolLayers()" title="清除工具标记">🗑️</button>
     </div>
-    <div id="popup" style="position:absolute;background:white;padding:15px;border-radius:6px;box-shadow:0 2px 12px rgba(0,0,0,0.15);max-width:280px;z-index:1000;display:none;">
-        <div onclick="closePopup()" style="position:absolute;top:8px;right:10px;width:20px;height:20px;line-height:18px;text-align:center;border-radius:50%;background:#f5f5f5;cursor:pointer;font-size:14px;color:#999;">×</div>
-        <div id="popup-title" style="font-weight:bold;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #eee;font-size:14px;color:#333;"></div>
-        <div id="popup-content" style="font-size:13px;color:#666;line-height:1.6;"></div>
+
+    <div id="coord-input-panel">
+        <label style="font-size:13px;color:#666;">经度：</label>
+        <input type="text" id="lng-input" placeholder="输入经度">
+        <label style="font-size:13px;color:#666;">纬度：</label>
+        <input type="text" id="lat-input" placeholder="输入纬度">
+        <div style="margin-top:5px;">
+            <button onclick="locateByCoord()">定位</button>
+            <button onclick="hideCoordInput()">关闭</button>
+        </div>
+    </div>
+
+    <div id="pick-result-panel">
+        <div class="result-item">
+            <span class="result-label">WGS84：</span>
+            <span class="result-value" id="wgs84-lng"></span>, <span class="result-value" id="wgs84-lat"></span>
+        </div>
+        <div class="result-item">
+            <span class="result-label">GCJ02：</span>
+            <span class="result-value" id="gcj-lng"></span>, <span class="result-value" id="gcj-lat"></span>
+        </div>
+        <button onclick="copyCoords()">复制坐标</button>
+        <button onclick="hidePickResult()">关闭</button>
+    </div>
+
+    <div id="ranging-result">
+        <span id="ranging-distance">总距离：0 米</span>
+        <button onclick="stopRanging()">结束测距</button>
+        <button onclick="clearMeasure()">清除</button>
+    </div>
+
+    <div id="layer-control">
+        <label><input type="radio" name="map-type" value="vec" checked onchange="switchMapType(this.value)"> 矢量地图</label>
+        <label><input type="radio" name="map-type" value="img" onchange="switchMapType(this.value)"> 影像地图</label>
+        <label><input type="radio" name="map-type" value="ter" onchange="switchMapType(this.value)"> 地形地图</label>
+    </div>
+
+    <div id="toggle-panel" onclick="togglePanel()">‹</div>
+
+    <div id="search-panel">
+        <div class="panel-content">
+            <h3 class="panel-title">企业名称搜索</h3>
+            <textarea id="company-names" placeholder="输入企业名称，多个用逗号隔开&#10;&#10;支持中文逗号和英文逗号&#10;&#10;例如：陕西环信，华为技术有限公司，西安比亚迪"></textarea>
+            <div class="search-mode">
+                <label><input type="radio" name="search-mode" value="one" checked onchange="changeSearchMode()"> 单个（第一条）</label>
+                <label><input type="radio" name="search-mode" value="all" onchange="changeSearchMode()"> 全部（所有结果）</label>
+                <input type="number" id="page-count" value="10" min="1" max="100" placeholder="条数">
+            </div>
+            <div class="btn-group">
+                <button onclick="searchCompanies()" id="search-btn">查询</button>
+                <button onclick="exportToCSV()" id="export-btn" disabled>导出 CSV</button>
+            </div>
+            <div id="progress"></div>
+            <h3 class="panel-title">查询结果</h3>
+            <div id="result-list"></div>
+            <div id="pagination">
+                <button onclick="prevPage()" id="prev-btn">上一页</button>
+                <span id="page-info">第 1 页 / 共 1 页</span>
+                <button onclick="nextPage()" id="next-btn">下一页</button>
+            </div>
+            <div class="hint">提示：点击列表项可定位到地图上的点位</div>
+        </div>
+    </div>
+
+    <div id="popup">
+        <div id="popup-close" onclick="closePopup()">×</div>
+        <div id="popup-title"></div>
+        <div id="popup-content"></div>
     </div>
 
     <script>
@@ -52,9 +178,46 @@
         let totalPages = 1;
         let map = null;
         let markerLayer = null;
+        let toolLayer = null;
+        let measureLayer = null;
+        let baseLayer = null;
+        let labelLayer = null;
         let selectedFeature = null;
+        let isPanelCollapsed = false;
+        let isPickMode = false;
+        let isRangingMode = false;
+        let drawInteraction = null;
+        let measureTooltip = null;
+        let measureTooltipEl = null;
+        let totalMeasureDistance = 0;
+        let locateFeature = null;
+        let pickFeatures = [];
 
+        const TDT_LAYERS = {
+            vec: { base: 'vec', label: 'cva' },
+            img: { base: 'img', label: 'cia' },
+            ter: { base: 'ter', label: 'cta' }
+        };
 
+        function createTdtTileLayer(layerName) {
+            return new ol.layer.Tile({
+                source: new ol.source.XYZ({
+                    crossOrigin: 'Anonymous',
+                    tileUrlFunction: function(tileCoord) {
+                        const z = tileCoord[0];
+                        const x = tileCoord[1];
+                        const y = tileCoord[2];
+                        return `https://t0.tianditu.gov.cn/${layerName}_c/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=${layerName}&STYLE=default&TILEMATRIXSET=c&FORMAT=tiles&TILEMATRIX=${z}&TILEROW=${y}&TILECOL=${x}&tk=${TD_KEY}`;
+                    },
+                    projection: 'EPSG:4326'
+                })
+            });
+        }
+
+        function createTdtLayerPair(type) {
+            const cfg = TDT_LAYERS[type];
+            return [createTdtTileLayer(cfg.base), createTdtTileLayer(cfg.label)];
+        }
 
         function initMap() {
             const view = new ol.View({
@@ -65,31 +228,7 @@
                 minZoom: 6
             });
 
-            const tdtBase = new ol.layer.Tile({
-                source: new ol.source.XYZ({
-                    crossOrigin: 'Anonymous',
-                    tileUrlFunction: function(tileCoord) {
-                        const z = tileCoord[0];
-                        const x = tileCoord[1];
-                        const y = tileCoord[2];
-                        return `https://t0.tianditu.gov.cn/vec_c/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=vec&STYLE=default&TILEMATRIXSET=c&FORMAT=tiles&TILEMATRIX=${z}&TILEROW=${y}&TILECOL=${x}&tk=${TD_KEY}`;
-                    },
-                    projection: 'EPSG:4326'
-                })
-            });
-
-            const tdtLabel = new ol.layer.Tile({
-                source: new ol.source.XYZ({
-                    crossOrigin: 'Anonymous',
-                    tileUrlFunction: function(tileCoord) {
-                        const z = tileCoord[0];
-                        const x = tileCoord[1];
-                        const y = tileCoord[2];
-                        return `https://t0.tianditu.gov.cn/cva_c/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cva&STYLE=default&TILEMATRIXSET=c&FORMAT=tiles&TILEMATRIX=${z}&TILEROW=${y}&TILECOL=${x}&tk=${TD_KEY}`;
-                    },
-                    projection: 'EPSG:4326'
-                })
-            });
+            [baseLayer, labelLayer] = createTdtLayerPair('vec');
 
             const markerSource = new ol.source.Vector();
             markerLayer = new ol.layer.Vector({
@@ -98,37 +237,309 @@
                     const isSelected = feature.get('selected');
                     return new ol.style.Style({
                         image: new ol.style.Icon({
-                            src: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"%3E%3Cpath d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/%3E%3Ccircle cx="12" cy="10" r="3"/%3E%3C/svg%3E',
+                            src: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23fff" stroke-width="2"%3E%3Cpath d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/%3E%3Ccircle cx="12" cy="10" r="3"/%3E%3C/svg%3E',
                             anchor: [0.5, 1],
                             scale: isSelected ? 1.3 : 1.1,
                             color: isSelected ? '#f56c6c' : '#409eff'
                         })
                     });
-                }
+                },
+                zIndex: 20
+            });
+
+            toolLayer = new ol.layer.Vector({
+                source: new ol.source.Vector(),
+                style: function(feature) {
+                    const type = feature.get('type');
+                    if (type === 'locate') {
+                        return new ol.style.Style({
+                            image: new ol.style.Icon({
+                                src: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="%23f56c6c" stroke="%23fff" stroke-width="1.5"%3E%3Cpath d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/%3E%3Ccircle cx="12" cy="10" r="3" fill="%23fff"/%3E%3C/svg%3E',
+                                anchor: [0.5, 1],
+                                scale: 1.2
+                            })
+                        });
+                    }
+                    if (type === 'pick') {
+                        return new ol.style.Style({
+                            image: new ol.style.Icon({
+                                src: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="%2367c23a" stroke="%23fff" stroke-width="1.5"%3E%3Cpath d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/%3E%3Ccircle cx="12" cy="10" r="3" fill="%23fff"/%3E%3C/svg%3E',
+                                anchor: [0.5, 1],
+                                scale: 1.1
+                            })
+                        });
+                    }
+                    return new ol.style.Style({
+                        image: new ol.style.Circle({ radius: 5, fill: new ol.style.Fill({ color: '#ffcc33' }), stroke: new ol.style.Stroke({ color: '#fff', width: 2 }) })
+                    });
+                },
+                zIndex: 21
+            });
+
+            measureLayer = new ol.layer.Vector({
+                source: new ol.source.Vector(),
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({ color: '#ffcc33', width: 3, lineDash: [8, 8] }),
+                    image: new ol.style.Circle({ radius: 5, fill: new ol.style.Fill({ color: '#ffcc33' }), stroke: new ol.style.Stroke({ color: '#fff', width: 2 }) })
+                }),
+                zIndex: 19
             });
 
             map = new ol.Map({
                 target: 'map',
-                layers: [tdtBase, tdtLabel, markerLayer],
+                layers: [baseLayer, labelLayer, measureLayer, markerLayer, toolLayer],
                 view: view,
                 controls: []
             });
 
-            map.on('click', function(e) {
-                map.forEachFeatureAtPixel(e.pixel, function(feature) {
-                    showPopup(feature, e.coordinate);
-                    return true;
-                });
+            measureTooltipEl = document.createElement('div');
+            measureTooltipEl.className = 'ol-tooltip ol-tooltip-measure';
+            measureTooltip = new ol.Overlay({
+                element: measureTooltipEl,
+                offset: [0, -15],
+                positioning: 'bottom-center',
+                stopEvent: false
             });
+            map.addOverlay(measureTooltip);
 
-            map.on('click', function(e) {
-                const features = map.getFeaturesAtPixel(e.pixel);
-                if (!features || features.length === 0) {
-                    closePopup();
+            map.on('singleclick', function(e) {
+                if (isPickMode) {
+                    handlePickClick(e);
+                    return;
                 }
+                if (isRangingMode) return;
+
+                let clicked = false;
+                map.forEachFeatureAtPixel(e.pixel, function(feature, layer) {
+                    if (layer === markerLayer) {
+                        showPopup(feature, e.coordinate);
+                        clicked = true;
+                        return true;
+                    }
+                });
+                if (!clicked) closePopup();
             });
 
             return map;
+        }
+
+        function togglePanel() {
+            const panel = document.getElementById('search-panel');
+            const toggleBtn = document.getElementById('toggle-panel');
+            isPanelCollapsed = !isPanelCollapsed;
+
+            if (isPanelCollapsed) {
+                panel.classList.add('collapsed');
+                toggleBtn.innerHTML = '›';
+                document.body.classList.remove('panel-open');
+            } else {
+                panel.classList.remove('collapsed');
+                toggleBtn.innerHTML = '‹';
+                document.body.classList.add('panel-open');
+            }
+            setTimeout(function() { map.updateSize(); }, 350);
+        }
+
+        function switchMapType(type) {
+            if (!TDT_LAYERS[type]) return;
+            map.removeLayer(baseLayer);
+            map.removeLayer(labelLayer);
+            [baseLayer, labelLayer] = createTdtLayerPair(type);
+            map.getLayers().insertAt(0, baseLayer);
+            map.getLayers().insertAt(1, labelLayer);
+        }
+
+        function showCoordInput() {
+            document.getElementById('coord-input-panel').classList.toggle('show');
+            if (isPickMode) togglePickCoord();
+        }
+
+        function hideCoordInput() {
+            document.getElementById('coord-input-panel').classList.remove('show');
+        }
+
+        function locateByCoord() {
+            const lng = parseFloat(document.getElementById('lng-input').value);
+            const lat = parseFloat(document.getElementById('lat-input').value);
+
+            if (isNaN(lng) || isNaN(lat)) {
+                alert('请输入有效的经纬度坐标');
+                return;
+            }
+
+            map.getView().animate({ center: [lng, lat], zoom: 16, duration: 500 });
+
+            if (locateFeature) {
+                toolLayer.getSource().removeFeature(locateFeature);
+            }
+            locateFeature = new ol.Feature({
+                geometry: new ol.geom.Point([lng, lat]),
+                type: 'locate'
+            });
+            toolLayer.getSource().addFeature(locateFeature);
+            hideCoordInput();
+        }
+
+        function togglePickCoord() {
+            const btn = document.getElementById('pick-btn');
+            isPickMode = !isPickMode;
+
+            if (isPickMode) {
+                if (isRangingMode) stopRanging();
+                btn.classList.add('active');
+                hideCoordInput();
+                map.getTargetElement().style.cursor = 'crosshair';
+            } else {
+                btn.classList.remove('active');
+                map.getTargetElement().style.cursor = '';
+            }
+        }
+
+        function handlePickClick(e) {
+            const lng = e.coordinate[0];
+            const lat = e.coordinate[1];
+            const wgs84Lng = lng;
+            const wgs84Lat = lat;
+            const [gcjLng, gcjLat] = gcoord.transform([lng, lat], gcoord.WGS84, gcoord.GCJ02);
+
+            document.getElementById('wgs84-lng').textContent = wgs84Lng.toFixed(6);
+            document.getElementById('wgs84-lat').textContent = wgs84Lat.toFixed(6);
+            document.getElementById('gcj-lng').textContent = gcjLng.toFixed(6);
+            document.getElementById('gcj-lat').textContent = gcjLat.toFixed(6);
+            document.getElementById('pick-result-panel').classList.add('show');
+
+            const pickFeature = new ol.Feature({
+                geometry: new ol.geom.Point([lng, lat]),
+                type: 'pick'
+            });
+            toolLayer.getSource().addFeature(pickFeature);
+            pickFeatures.push(pickFeature);
+        }
+
+        function hidePickResult() {
+            document.getElementById('pick-result-panel').classList.remove('show');
+        }
+
+        function copyCoords() {
+            const wgs84Lng = document.getElementById('wgs84-lng').textContent;
+            const wgs84Lat = document.getElementById('wgs84-lat').textContent;
+            const gcjLng = document.getElementById('gcj-lng').textContent;
+            const gcjLat = document.getElementById('gcj-lat').textContent;
+            const text = `WGS84: ${wgs84Lng}, ${wgs84Lat}\nGCJ02: ${gcjLng}, ${gcjLat}`;
+
+            navigator.clipboard.writeText(text).then(function() {
+                alert('坐标已复制到剪贴板！');
+            }).catch(function() {
+                alert('复制失败');
+            });
+        }
+
+        function formatLength(line) {
+            const length = ol.sphere.getLength(line, { projection: 'EPSG:4326' });
+            if (length > 1000) {
+                return (length / 1000).toFixed(2) + ' 公里';
+            }
+            return length.toFixed(2) + ' 米';
+        }
+
+        function toggleRanging() {
+            if (isRangingMode) {
+                stopRanging();
+            } else {
+                if (isPickMode) togglePickCoord();
+                isRangingMode = true;
+                document.getElementById('ranging-btn').classList.add('active');
+                document.getElementById('ranging-result').classList.add('show');
+                startDrawMeasure();
+            }
+        }
+
+        function startDrawMeasure() {
+            drawInteraction = new ol.interaction.Draw({
+                source: measureLayer.getSource(),
+                type: 'LineString',
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({ color: '#ffcc33', width: 3, lineDash: [8, 8] }),
+                    image: new ol.style.Circle({ radius: 5, fill: new ol.style.Fill({ color: '#ffcc33' }), stroke: new ol.style.Stroke({ color: '#fff', width: 2 }) })
+                })
+            });
+
+            let sketch = null;
+            let listener = null;
+
+            drawInteraction.on('drawstart', function(e) {
+                sketch = e.feature;
+                listener = sketch.getGeometry().on('change', function(evt) {
+                    const geom = evt.target;
+                    const output = formatLength(geom);
+                    const coord = geom.getLastCoordinate();
+                    measureTooltipEl.innerHTML = output;
+                    measureTooltip.setPosition(coord);
+                });
+            });
+
+            drawInteraction.on('drawend', function(e) {
+                const geom = e.feature.getGeometry();
+                const segLength = ol.sphere.getLength(geom, { projection: 'EPSG:4326' });
+                totalMeasureDistance += segLength;
+                updateMeasureDisplay();
+
+                measureTooltipEl.className = 'ol-tooltip ol-tooltip-static';
+                measureTooltipEl.innerHTML = formatLength(geom);
+                measureTooltip.setOffset([0, -7]);
+
+                sketch = null;
+                ol.Observable.unByKey(listener);
+            });
+
+            map.addInteraction(drawInteraction);
+        }
+
+        function updateMeasureDisplay() {
+            let text;
+            if (totalMeasureDistance > 1000) {
+                text = '总距离：' + (totalMeasureDistance / 1000).toFixed(2) + ' 公里';
+            } else {
+                text = '总距离：' + totalMeasureDistance.toFixed(2) + ' 米';
+            }
+            document.getElementById('ranging-distance').textContent = text;
+        }
+
+        function stopRanging() {
+            isRangingMode = false;
+            document.getElementById('ranging-btn').classList.remove('active');
+            document.getElementById('ranging-result').classList.remove('show');
+
+            if (drawInteraction) {
+                map.removeInteraction(drawInteraction);
+                drawInteraction = null;
+            }
+            measureTooltip.setPosition(undefined);
+            measureTooltipEl.innerHTML = '';
+            measureTooltipEl.className = 'ol-tooltip ol-tooltip-measure';
+        }
+
+        function clearMeasure() {
+            measureLayer.getSource().clear();
+            totalMeasureDistance = 0;
+            updateMeasureDisplay();
+            measureTooltip.setPosition(undefined);
+            measureTooltipEl.innerHTML = '';
+        }
+
+        function clearToolLayers() {
+            if (locateFeature) {
+                toolLayer.getSource().removeFeature(locateFeature);
+                locateFeature = null;
+            }
+            pickFeatures.forEach(function(f) {
+                toolLayer.getSource().removeFeature(f);
+            });
+            pickFeatures = [];
+            hidePickResult();
+            clearMeasure();
+            if (isRangingMode) stopRanging();
+            if (isPickMode) togglePickCoord();
         }
 
         function changeSearchMode() {
@@ -137,17 +548,14 @@
             for (let i = 0; i < radios.length; i++) {
                 if (radios[i].checked) {
                     searchMode = radios[i].value;
-                    if (searchMode === 'all') {
-                        countInput.style.display = 'inline-block';
-                    } else {
-                        countInput.style.display = 'none';
-                    }
+                    countInput.style.display = searchMode === 'all' ? 'inline-block' : 'none';
                     break;
                 }
             }
         }
 
-        async function fetchTdtAPI(keyWord, count = 10) {
+        async function fetchTdtAPI(keyWord, count) {
+            count = count || 10;
             const url = 'https://api.tianditu.gov.cn/v2/search';
             const postData = {
                 keyWord: keyWord,
@@ -155,11 +563,11 @@
                 start: 0,
                 count: count,
                 specify: '156610000',
-                show:2
+                show: 2
             };
 
             const postStr = encodeURIComponent(JSON.stringify(postData));
-            const fullUrl = `${url}?postStr=${postStr}&type=query&tk=${TD_KEY}`;
+            const fullUrl = url + '?postStr=' + postStr + '&type=query&tk=' + TD_KEY;
 
             try {
                 const response = await fetch(fullUrl);
@@ -177,48 +585,34 @@
                                 name: firstPoi.name || '',
                                 address: firstPoi.address || ''
                             };
-                        } else {
-                            const results = [];
-                            data.pois.forEach(poi => {
-                                const lonlat = poi.lonlat.split(',');
-                                results.push({
-                                    company_name: keyWord,
-                                    lng: lonlat[0] || '',
-                                    lat: lonlat[1] || '',
-                                    name: poi.name || '',
-                                    address: poi.address || '',
-                                    phone: poi.phone || '',
-                                    poiType: poi.poiType || ''
-                                });
-                            });
-                            return results;
                         }
-                    } else {
-                        return searchMode === 'one' ? {
-                            company_name: keyWord,
-                            lng: '',
-                            lat: '',
-                            name: '',
-                            address: '未找到相关结果'
-                        } : [];
+                        const results = [];
+                        data.pois.forEach(function(poi) {
+                            const lonlat = poi.lonlat.split(',');
+                            results.push({
+                                company_name: keyWord,
+                                lng: lonlat[0] || '',
+                                lat: lonlat[1] || '',
+                                name: poi.name || '',
+                                address: poi.address || '',
+                                phone: poi.phone || '',
+                                poiType: poi.poiType || ''
+                            });
+                        });
+                        return results;
                     }
-                } else {
                     return searchMode === 'one' ? {
-                        company_name: keyWord,
-                        lng: '',
-                        lat: '',
-                        name: '',
-                        address: '搜索失败：' + (data.status?.cndesc || '未知错误')
+                        company_name: keyWord, lng: '', lat: '', name: '', address: '未找到相关结果'
                     } : [];
                 }
+                return searchMode === 'one' ? {
+                    company_name: keyWord, lng: '', lat: '', name: '',
+                    address: '搜索失败：' + (data.status && data.status.cndesc || '未知错误')
+                } : [];
             } catch (error) {
                 console.error('搜索失败:', error);
                 return searchMode === 'one' ? {
-                    company_name: keyWord,
-                    lng: '',
-                    lat: '',
-                    name: '',
-                    address: '网络错误：' + error.message
+                    company_name: keyWord, lng: '', lat: '', name: '', address: '网络错误：' + error.message
                 } : [];
             }
         }
@@ -231,17 +625,10 @@
             const countInput = document.getElementById('page-count');
             const count = searchMode === 'one' ? 1 : (parseInt(countInput.value) || 10);
 
-            if (!input) {
-                alert('请输入企业名称');
-                return;
-            }
+            if (!input) { alert('请输入企业名称'); return; }
 
-            const names = input.split(/[,，\n\r]+/).map(n => n.trim()).filter(n => n);
-
-            if (names.length === 0) {
-                alert('请输入有效的企业名称');
-                return;
-            }
+            const names = input.split(/[,，\n\r]+/).map(function(n) { return n.trim(); }).filter(function(n) { return n; });
+            if (names.length === 0) { alert('请输入有效的企业名称'); return; }
 
             searchResults = [];
             allResults = [];
@@ -251,32 +638,26 @@
 
             for (let i = 0; i < names.length; i++) {
                 const name = names[i];
-                progress.innerHTML += `<p style="color:#909399;">正在搜索：${name} (${i + 1}/${names.length})</p>`;
+                progress.innerHTML += '<p style="color:#909399;">正在搜索：' + name + ' (' + (i + 1) + '/' + names.length + ')</p>';
 
                 const result = await fetchTdtAPI(name, count);
 
                 if (searchMode === 'all' && Array.isArray(result)) {
-                    allResults.push(...result);
-                    if (result.length > 0) {
-                        progress.innerHTML += `<p style="color:#67c23a;">✓ ${name}: 找到${result.length}条结果</p>`;
-                    } else {
-                        progress.innerHTML += `<p style="color:#f56c6c;">✗ ${name}: 未找到结果</p>`;
-                    }
+                    allResults.push.apply(allResults, result);
+                    progress.innerHTML += result.length > 0
+                        ? '<p style="color:#67c23a;">✓ ' + name + ': 找到' + result.length + '条结果</p>'
+                        : '<p style="color:#f56c6c;">✗ ' + name + ': 未找到结果</p>';
                 } else {
                     searchResults.push(result);
-                    if (result.lng && result.lat) {
-                        progress.innerHTML += `<p style="color:#67c23a;">✓ ${name}: ${result.name}</p>`;
-                    } else {
-                        progress.innerHTML += `<p style="color:#f56c6c;">✗ ${name}: ${result.address}</p>`;
-                    }
+                    progress.innerHTML += result.lng && result.lat
+                        ? '<p style="color:#67c23a;">✓ ' + name + ': ' + result.name + '</p>'
+                        : '<p style="color:#f56c6c;">✗ ' + name + ': ' + result.address + '</p>';
                 }
 
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(function(resolve) { setTimeout(resolve, 1000); });
             }
 
-            if (searchMode === 'all') {
-                searchResults = allResults;
-            }
+            if (searchMode === 'all') searchResults = allResults;
 
             currentPage = 1;
             renderResultList(searchResults);
@@ -290,25 +671,23 @@
 
         function renderResultList(results) {
             const listEl = document.getElementById('result-list');
-
             if (!results || results.length === 0) {
                 listEl.innerHTML = '<div style="text-align:center;color:#999;padding:40px 20px;font-size:14px;">暂无数据</div>';
                 return;
             }
 
             const start = (currentPage - 1) * pageSize;
-            const end = start + pageSize;
-            const pageData = results.slice(start, end);
-
+            const pageData = results.slice(start, start + pageSize);
             let html = '';
-            pageData.forEach((result, index) => {
+
+            pageData.forEach(function(result, index) {
                 const hasCoords = result.lng && result.lat;
                 const actualIndex = start + index;
-                html += `<div class="list-item ${hasCoords ? 'found' : 'not-found'}" onclick="handleListItemClick(${actualIndex})" style="padding:12px;border-bottom:1px solid #f5f5f5;cursor:pointer;${hasCoords ? 'border-left:3px solid #67c23a' : 'border-left:3px solid #f56c6c;opacity:0.7'};">
-                    <div style="font-weight:bold;color:#333;margin-bottom:4px;">${result.name || result.company_name}</div>
-                    <div style="font-size:12px;color:#666;margin-bottom:4px;">${result.address || '-'}</div>
-                    <div style="font-size:11px;color:#999;">${hasCoords ? result.lng + ', ' + result.lat : '无坐标'}</div>
-                </div>`;
+                html += '<div class="list-item ' + (hasCoords ? 'found' : 'not-found') + '" onclick="handleListItemClick(' + actualIndex + ')">' +
+                    '<div style="font-weight:bold;color:#333;margin-bottom:4px;">' + (result.name || result.company_name) + '</div>' +
+                    '<div style="font-size:12px;color:#666;margin-bottom:4px;">' + (result.address || '-') + '</div>' +
+                    '<div style="font-size:11px;color:#999;">' + (hasCoords ? result.lng + ', ' + result.lat : '无坐标') + '</div>' +
+                    '</div>';
             });
 
             listEl.innerHTML = html;
@@ -324,7 +703,7 @@
 
             if (totalPages > 1) {
                 paginationEl.style.display = 'block';
-                pageInfoEl.textContent = `第 ${currentPage} 页 / 共 ${totalPages} 页`;
+                pageInfoEl.textContent = '第 ' + currentPage + ' 页 / 共 ' + totalPages + ' 页';
                 prevBtn.disabled = currentPage === 1;
                 nextBtn.disabled = currentPage === totalPages;
             } else {
@@ -333,17 +712,11 @@
         }
 
         function prevPage() {
-            if (currentPage > 1) {
-                currentPage--;
-                renderResultList(searchResults);
-            }
+            if (currentPage > 1) { currentPage--; renderResultList(searchResults); }
         }
 
         function nextPage() {
-            if (currentPage < totalPages) {
-                currentPage++;
-                renderResultList(searchResults);
-            }
+            if (currentPage < totalPages) { currentPage++; renderResultList(searchResults); }
         }
 
         function handleListItemClick(index) {
@@ -361,66 +734,50 @@
         }
 
         function addMarkers(results) {
-            if (markerLayer) {
-                markerLayer.getSource().clear();
-            }
-
+            markerLayer.getSource().clear();
             const features = [];
-            results.forEach(result => {
+
+            results.forEach(function(result) {
                 if (result.lng && result.lat) {
-                    const point = new ol.geom.Point([parseFloat(result.lng), parseFloat(result.lat)]);
-                    const feature = new ol.Feature({
-                        geometry: point,
+                    features.push(new ol.Feature({
+                        geometry: new ol.geom.Point([parseFloat(result.lng), parseFloat(result.lat)]),
                         company_name: result.company_name,
                         name: result.name,
                         address: result.address,
                         lng: result.lng,
                         lat: result.lat
-                    });
-                    features.push(feature);
+                    }));
                 }
             });
 
-            if (markerLayer && features.length > 0) {
+            if (features.length > 0) {
                 markerLayer.getSource().addFeatures(features);
             }
         }
 
         function zoomToFeature(feature) {
             if (!map || !feature) return;
-
             const geometry = feature.getGeometry();
-            if (geometry) {
-                map.getView().animate({
-                    center: geometry.getCoordinates(),
-                    zoom: 16,
-                    duration: 500
-                });
+            if (!geometry) return;
 
-                if (selectedFeature) {
-                    selectedFeature.set('selected', false);
-                }
-                selectedFeature = feature;
-                feature.set('selected', true);
-                markerLayer.getSource().changed();
-            }
+            map.getView().animate({ center: geometry.getCoordinates(), zoom: 16, duration: 500 });
+
+            if (selectedFeature) selectedFeature.set('selected', false);
+            selectedFeature = feature;
+            feature.set('selected', true);
+            markerLayer.changed();
         }
 
         function showPopup(feature, coordinate) {
             const popupEl = document.getElementById('popup');
-            const titleEl = document.getElementById('popup-title');
-            const contentEl = document.getElementById('popup-content');
-
-            if (!feature || !popupEl) return;
-
             const props = feature.getProperties();
-            titleEl.textContent = props.name || props.company_name;
-            contentEl.innerHTML = `
-                <p><span style="color:#999;margin-right:5px;">搜索名称:</span>${props.company_name}</p>
-                <p><span style="color:#999;margin-right:5px;">名称:</span>${props.name || '-'}</p>
-                <p><span style="color:#999;margin-right:5px;">地址:</span>${props.address || '-'}</p>
-                <p><span style="color:#999;margin-right:5px;">坐标:</span>${props.lng}, ${props.lat}</p>
-            `;
+
+            document.getElementById('popup-title').textContent = props.name || props.company_name;
+            document.getElementById('popup-content').innerHTML =
+                '<p><span style="color:#999;margin-right:5px;">搜索名称:</span>' + props.company_name + '</p>' +
+                '<p><span style="color:#999;margin-right:5px;">名称:</span>' + (props.name || '-') + '</p>' +
+                '<p><span style="color:#999;margin-right:5px;">地址:</span>' + (props.address || '-') + '</p>' +
+                '<p><span style="color:#999;margin-right:5px;">坐标:</span>' + props.lng + ', ' + props.lat + '</p>';
 
             const pixel = map.getPixelFromCoordinate(coordinate);
             popupEl.style.left = (pixel[0] + 15) + 'px';
@@ -429,10 +786,7 @@
         }
 
         function closePopup() {
-            const popupEl = document.getElementById('popup');
-            if (popupEl) {
-                popupEl.style.display = 'none';
-            }
+            document.getElementById('popup').style.display = 'none';
         }
 
         function exportToCSV() {
@@ -444,27 +798,19 @@
             const headers = ['搜索名称', '经度', '纬度', '名称', '地址', '电话', '类型'];
             let csvContent = headers.join(',') + '\n';
 
-            searchResults.forEach(result => {
-                const row = [
-                    `"${result.company_name}"`,
-                    result.lng,
-                    result.lat,
-                    `"${result.name}"`,
-                    `"${result.address}"`,
-                    `"${result.phone || ''}"`,
-                    `"${result.poiType || ''}"`
-                ];
-                csvContent += row.join(',') + '\n';
+            searchResults.forEach(function(result) {
+                csvContent += [
+                    '"' + result.company_name + '"', result.lng, result.lat,
+                    '"' + result.name + '"', '"' + result.address + '"',
+                    '"' + (result.phone || '') + '"', '"' + (result.poiType || '') + '"'
+                ].join(',') + '\n';
             });
 
             const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-
-            link.setAttribute('href', url);
-            link.setAttribute('download', `tdt_search_results_${new Date().toLocaleDateString().replace(/\//g, '-')}.csv`);
+            link.href = URL.createObjectURL(blob);
+            link.download = 'tdt_search_results_' + new Date().toLocaleDateString().replace(/\//g, '-') + '.csv';
             link.style.visibility = 'hidden';
-
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
