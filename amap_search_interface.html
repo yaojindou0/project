@@ -6,6 +6,7 @@
     <title>高德地图企业搜索</title>
     <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=75bc5538c1031c7abe45df341c993fb8&plugin=AMap.Geocoder,AMap.RangingTool"></script>
     <script type="text/javascript" src="gcoord.global.prod.js"></script>
+    <script type="text/javascript" src="region_data.js"></script>
     <style>
         body { margin: 0; padding: 0; display: flex; height: 100vh; font-family: 'Microsoft YaHei', Arial, sans-serif; overflow: hidden; }
         #map { flex: 1; height: 100%; position: relative; }
@@ -20,7 +21,11 @@
         #company-names { width: 95%; height: 100px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: none; font-size: 14px; margin-bottom: 15px; outline: none; }
         .search-mode { margin-bottom: 15px; }
         .search-mode label { margin-right: 15px; cursor: pointer; }
-        #page-count { width: 60px; margin-left: 10px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 13px; display: none; }
+        #page-count { width: 40px; margin-left: 10px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 13px; display: none; }
+        .region-select { margin-bottom: 15px; }
+        .region-select label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+        .region-select select { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px; margin-bottom: 8px; outline: none; }
+        .region-select select:last-child { margin-bottom: 0; }
         .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
         .btn-group button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
         #search-btn { background: #409eff; color: #fff; }
@@ -123,6 +128,12 @@
     
         <div class="panel-content">
             <h3 class="panel-title">企业名称搜索</h3>
+            <div class="region-select">
+                <label for="province-select">省份</label>
+                <select id="province-select"></select>
+                <label for="city-select">地市</label>
+                <select id="city-select"></select>
+            </div>
             <textarea id="company-names" placeholder="输入企业名称，多个用逗号隔开或换行&#10;&#10;支持：中文逗号、英文逗号、换行&#10;&#10;例如：陕西环信，华为技术有限公司&#10;西安比亚迪"></textarea>
             <div class="search-mode">
                 <label>
@@ -195,7 +206,7 @@
 
             map = new AMap.Map('map', {
                 center: [108.95, 34.27],
-                zoom: 8,
+                zoom: 12,
                 resizeEnable: true,
                 layers: [normalLayer],
                 features: ['bg', 'road', 'building', 'point']
@@ -421,10 +432,12 @@
 
         async function fetchAmapAPI(keyWord, count = 10) {
             const url = 'https://restapi.amap.com/v3/place/text';
+            const region = RegionData.getSelectedRegion('province-select', 'city-select');
             const params = new URLSearchParams({
                 key: AMAP_SEARCH_KEY,
                 keywords: keyWord,
-                city: '陕西',
+                city: region.amapCity,
+                citylimit: 'true',
                 offset: count,
                 page: 1,
                 extensions: 'all',
@@ -777,6 +790,7 @@
         }
 
         initMap();
+        RegionData.initSelects('province-select', 'city-select', RegionData.DEFAULT_PROVINCE);
     </script>
 </body>
 </html>

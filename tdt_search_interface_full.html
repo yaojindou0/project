@@ -7,6 +7,7 @@
     <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.css">
     <script src="gcoord.global.prod.js"></script>
+    <script src="region_data.js"></script>
     <style>
         body { margin: 0; padding: 0; height: 100vh; font-family: 'Microsoft YaHei', Arial, sans-serif; overflow: hidden; }
         #map { width: 100%; height: 100%; position: relative; }
@@ -35,7 +36,11 @@
         #company-names { width: 95%; height: 100px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: none; font-size: 14px; margin-bottom: 15px; outline: none; }
         .search-mode { margin-bottom: 15px; }
         .search-mode label { margin-right: 15px; cursor: pointer; }
-        #page-count { width: 60px; margin-left: 10px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 13px; display: none; }
+        #page-count { width: 40px; margin-left: 10px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 13px; display: none; }
+        .region-select { margin-bottom: 15px; }
+        .region-select label { display: block; font-size: 12px; color: #606266; margin-bottom: 4px; }
+        .region-select select { width: 100%; padding: 6px 8px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; margin-bottom: 8px; outline: none; }
+        .region-select select:last-child { margin-bottom: 0; }
         .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
         .btn-group button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
         #search-btn { background: #409eff; color: #fff; }
@@ -140,6 +145,12 @@
     <div id="search-panel">
         <div class="panel-content">
             <h3 class="panel-title">企业名称搜索</h3>
+            <div class="region-select">
+                <label for="province-select">省份</label>
+                <select id="province-select"></select>
+                <label for="city-select">地市</label>
+                <select id="city-select"></select>
+            </div>
             <textarea id="company-names" placeholder="输入企业名称，多个用逗号隔开&#10;&#10;支持中文逗号和英文逗号&#10;&#10;例如：陕西环信，华为技术有限公司，西安比亚迪"></textarea>
             <div class="search-mode">
                 <label><input type="radio" name="search-mode" value="one" checked onchange="changeSearchMode()"> 单个（第一条）</label>
@@ -556,13 +567,14 @@
 
         async function fetchTdtAPI(keyWord, count) {
             count = count || 10;
+            const region = RegionData.getSelectedRegion('province-select', 'city-select');
             const url = 'https://api.tianditu.gov.cn/v2/search';
             const postData = {
                 keyWord: keyWord,
                 queryType: 12,
                 start: 0,
                 count: count,
-                specify: '156610000',
+                specify: region.tdtSpecify,
                 show: 2
             };
 
@@ -817,6 +829,7 @@
         }
 
         map = initMap();
+        RegionData.initSelects('province-select', 'city-select', RegionData.DEFAULT_PROVINCE);
     </script>
 </body>
 </html>
