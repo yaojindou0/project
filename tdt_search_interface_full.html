@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
     <title>天地图搜索</title>
     <script src="ol.js"></script>
     <link rel="stylesheet" href="ol.css">
@@ -220,7 +221,7 @@
                 </div>
                 <div class="layer-field">
                     <label>服务 URL</label>
-                    <span id="">
+                    <span id="" style="font-size: 11px;color: #ccc;">
                     	http://ip/youname/Layers/_alllayers/
                     	http://ip/arcgis/rest/services/youname/MapServer/tile/{z}/{y}/{x}
                     </span>
