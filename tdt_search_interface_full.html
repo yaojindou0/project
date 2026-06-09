@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>天地图企业搜索</title>
-    <script src="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@7.3.0/dist/ol.css">
+    <script src="ol.js"></script>
+    <link rel="stylesheet" href="ol.css">
     <script src="gcoord.global.prod.js"></script>
     <script src="region_data.js"></script>
     <style>
@@ -203,6 +203,10 @@
         let totalMeasureDistance = 0;
         let locateFeature = null;
         let pickFeatures = [];
+        let boundaryLayer = null;
+
+        const BOUNDARY_GEO_URL = 'https://geo.datav.aliyun.com/areas_v3/bound/';
+        const boundaryCache = {};
 
         const TDT_LAYERS = {
             vec: { base: 'vec', label: 'cva' },
@@ -296,9 +300,18 @@
                 zIndex: 19
             });
 
+            boundaryLayer = new ol.layer.Vector({
+                source: new ol.source.Vector(),
+                zIndex: 12,
+                style: new ol.style.Style({
+                    stroke: new ol.style.Stroke({ color: '#409eff', width: 2 }),
+                    fill: new ol.style.Fill({ color: 'rgba(64, 158, 255, 0)' })
+                })
+            });
+
             map = new ol.Map({
                 target: 'map',
-                layers: [baseLayer, labelLayer, measureLayer, markerLayer, toolLayer],
+                layers: [baseLayer, labelLayer, boundaryLayer, measureLayer, markerLayer, toolLayer],
                 view: view,
                 controls: []
             });
@@ -349,6 +362,73 @@
                 document.body.classList.add('panel-open');
             }
             setTimeout(function() { map.updateSize(); }, 350);
+        }
+
+        function getMapFitPadding() {
+            return [50, 50, 50, isPanelCollapsed ? 50 : 420];
+        }
+
+        function getBoundaryUrl(adcode) {
+            return BOUNDARY_GEO_URL + adcode + '_full.json';
+        }
+
+        async function fetchBoundaryGeoJson(adcode) {
+            if (boundaryCache[adcode]) return boundaryCache[adcode];
+            const resp = await fetch(getBoundaryUrl(adcode));
+            if (!resp.ok) return null;
+            const geojson = await resp.json();
+            boundaryCache[adcode] = geojson;
+            return geojson;
+        }
+
+        function fitMapToBoundary(extent, adcode, animate) {
+            if (!extent || !extent.every(isFinite)) return;
+            const isProvince = adcode.endsWith('0000');
+            map.getView().fit(extent, {
+//              padding: getMapFitPadding(),
+                duration: animate !== false ? 500 : 0,
+                maxZoom: isProvince ? 8 : 11
+            });
+        }
+
+        async function updateRegionBoundary(animate) {
+            if (!map || !boundaryLayer) return;
+            const region = RegionData.getSelectedRegion('province-select', 'city-select');
+            const adcode = region.adcode;
+
+            try {
+                let geojson = await fetchBoundaryGeoJson(adcode);
+                if (!geojson && adcode !== region.provinceAdcode) {
+                    geojson = await fetchBoundaryGeoJson(region.provinceAdcode);
+                }
+                if (!geojson) {
+                    console.warn('未找到边界数据:', adcode);
+                    return;
+                }
+
+                const format = new ol.format.GeoJSON();
+                const features = format.readFeatures(geojson, {
+                    dataProjection: 'EPSG:4326',
+                    featureProjection: 'EPSG:4326'
+                });
+
+                boundaryLayer.getSource().clear();
+                boundaryLayer.getSource().addFeatures(features);
+
+                const extent = boundaryLayer.getSource().getExtent();
+                fitMapToBoundary(extent, adcode, animate);
+            } catch (err) {
+                console.error('边界加载失败:', err);
+            }
+        }
+
+        function initRegionBoundaryEvents() {
+            document.getElementById('province-select').addEventListener('change', function() {
+                setTimeout(function() { updateRegionBoundary(true); }, 0);
+            });
+            document.getElementById('city-select').addEventListener('change', function() {
+                updateRegionBoundary(true);
+            });
         }
 
         function switchMapType(type) {
@@ -830,6 +910,8 @@
 
         map = initMap();
         RegionData.initSelects('province-select', 'city-select', RegionData.DEFAULT_PROVINCE);
+        initRegionBoundaryEvents();
+        updateRegionBoundary(false);
     </script>
 </body>
 </html>

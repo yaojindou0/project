@@ -5,7 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>坐标转换工具</title>
     <script src="gcoord.global.prod.js"></script>
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <script src="xlsx.full.min.js"></script>
+    <script src="shp.min.js"></script>
+    <script src="wellknown.js"></script>
+    <script src="shpwrite.js"></script>
+    <script src="coord_file_converter.js"></script>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -162,19 +166,14 @@
         .single-result .item { margin-bottom: 4px; }
         .single-result .label { color: #909399; margin-right: 8px; }
         .single-result .value { font-family: Consolas, monospace; color: #303133; }
-        .tabs { display: flex; gap: 0; margin-bottom: 16px; }
+        .tabs { display: flex; gap: 0; margin-bottom: 0; border-bottom: 1px solid #ebeef5; }
         .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            background: #e8eef5;
-            color: #606266;
-            border: none;
-            font-size: 14px;
-            border-radius: 6px 6px 0 0;
+            padding: 14px 24px; cursor: pointer; background: transparent; color: #606266;
+            border: none; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px;
         }
-        .tab.active { background: #fff; color: #409eff; font-weight: 600; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
+        .tab.active { color: #409eff; font-weight: 600; border-bottom-color: #409eff; }
+        .tab-body { display: none; }
+        .tab-body.active { display: block; }
         .file-input { display: none; }
         .toast {
             position: fixed;
@@ -224,16 +223,47 @@
             align-items: center;
         }
         .line-count { font-size: 12px; color: #909399; }
+        .tabs-wrap { background: #fff; border-radius: 8px 8px 0 0; padding: 0 16px; margin-bottom: 0; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+        .format-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+        .format-tab { padding: 6px 14px; border: 1px solid #dcdfe6; background: #fff; border-radius: 4px; cursor: pointer; font-size: 13px; color: #606266; }
+        .format-tab.active { background: #409eff; color: #fff; border-color: #409eff; }
+        .source-panel { display: none; }
+        .source-panel.active { display: block; }
+        .url-row { display: flex; gap: 8px; margin-bottom: 10px; }
+        .url-row input { flex: 1; padding: 8px 12px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; }
+        .upload-zone {
+            border: 2px dashed #dcdfe6; border-radius: 6px; padding: 24px; text-align: center;
+            color: #909399; font-size: 13px; cursor: pointer; transition: border-color 0.2s;
+        }
+        .upload-zone:hover { border-color: #409eff; color: #409eff; }
+        .upload-zone.has-file { border-color: #67c23a; color: #67c23a; background: #f0f9eb; }
+        .preview-box {
+            width: 100%; min-height: 180px; max-height: 320px; padding: 12px;
+            border: 1px solid #dcdfe6; border-radius: 4px; font-family: Consolas, monospace;
+            font-size: 12px; line-height: 1.6; resize: vertical; outline: none;
+        }
+        .file-info { font-size: 12px; color: #909399; margin-top: 8px; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>坐标转换工具</h1>
-        <p>基于 gcoord，支持 WGS84、高德 GCJ02、百度 BD09、百度墨卡托、Web 墨卡托 等坐标系互转</p>
+        <h1>转换工具</h1>
+        <p>支持 WGS84、高德 GCJ02、百度 BD09、百度墨卡托、Web 墨卡托 等坐标系互转</p>
+        <p>支持 json、geijson、shpfile、wkt、csv(点)文件转换</p>
     </div>
 
     <div class="container">
+        <div class="tabs-wrap">
+            <div class="tabs">
+                <button class="tab active" data-tab="coord" onclick="switchMainTab('coord')">坐标转换</button>
+                <button class="tab" data-tab="file" onclick="switchMainTab('file')">文件转换</button>
+            </div>
+        </div>
+
+        <div id="tab-coord" class="tab-body active">
+     
         <div class="panel">
+        	   <div style="border-radius:0 0 8px 8px;margin-top:0;">
             <div class="panel-title">转换设置</div>
             <div class="control-row">
                 <div class="form-group">
@@ -261,7 +291,6 @@
             </div>
         </div>
 
-        <div class="panel">
             <div class="input-layout">
                 <div>
                     <div class="input-panel-label">
@@ -316,6 +345,117 @@
                 <span id="convert-status"></span>
             </div>
         </div>
+        </div><!-- tab-coord -->
+
+        <div id="tab-file" class="tab-body">
+            <div class="panel" style="border-radius:0 0 8px 8px;margin-top:0;">
+                <div class="panel-title">转换设置</div>
+                <div class="control-row">
+                    <div class="form-group">
+                        <label>输入坐标系</label>
+                        <select id="file-input-crs"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>输出坐标系</label>
+                        <select id="file-output-crs"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>小数位数</label>
+                        <select id="file-precision" class="precision-select">
+                            <option value="4">4 位</option>
+                            <option value="6" selected>6 位</option>
+                            <option value="8">8 位</option>
+                            <option value="10">10 位</option>
+                        </select>
+                    </div>
+                    <button class="btn btn-primary" onclick="convertFile()">转换</button>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">输入数据</div>
+                <div class="format-tabs">
+                    <button class="format-tab active" data-format="geojson" onclick="switchFileFormat('geojson')">GeoJSON</button>
+                    <button class="format-tab" data-format="json" onclick="switchFileFormat('json')">JSON</button>
+                    <button class="format-tab" data-format="csv" onclick="switchFileFormat('csv')">CSV</button>
+                    <button class="format-tab" data-format="shp" onclick="switchFileFormat('shp')">Shapefile</button>
+                    <button class="format-tab" data-format="wkt" onclick="switchFileFormat('wkt')">WKT</button>
+                </div>
+
+                <div id="source-geojson" class="source-panel active">
+                    <div class="hint" style="margin-top:0;margin-bottom:10px;">GeoJSON 支持 <strong>URL 加载</strong> 或 <strong>本地上传</strong></div>
+                    <div class="url-row">
+                        <input type="url" id="geojson-url" placeholder="https://example.com/data.geojson">
+                        <button class="btn btn-default" onclick="loadFromUrl('geojson')">从 URL 加载</button>
+                    </div>
+                    <div class="upload-zone" id="zone-geojson" onclick="document.getElementById('file-geojson').click()">
+                        点击上传 GeoJSON 文件 (.geojson / .json)
+                        <input type="file" id="file-geojson" class="file-input" accept=".geojson,.json" onchange="onFileSelected(event,'geojson')">
+                    </div>
+                    <div class="file-info" id="info-geojson"></div>
+                </div>
+
+                <div id="source-json" class="source-panel">
+                    <div class="hint" style="margin-top:0;margin-bottom:10px;">JSON 支持 GeoJSON、Feature 或坐标数组 <code>[{lng,lat},...]</code>，可 URL 或本地上传</div>
+                    <div class="url-row">
+                        <input type="url" id="json-url" placeholder="https://example.com/data.json">
+                        <button class="btn btn-default" onclick="loadFromUrl('json')">从 URL 加载</button>
+                    </div>
+                    <div class="upload-zone" id="zone-json" onclick="document.getElementById('file-json').click()">
+                        点击上传 JSON 文件 (.json)
+                        <input type="file" id="file-json" class="file-input" accept=".json" onchange="onFileSelected(event,'json')">
+                    </div>
+                    <div class="file-info" id="info-json"></div>
+                </div>
+
+                <div id="source-csv" class="source-panel">
+                    <div class="hint" style="margin-top:0;margin-bottom:10px;">CSV 本地上传，自动识别 <code>经度/lng</code>、<code>纬度/lat</code> 或 <code>wkt</code> 列</div>
+                    <div class="upload-zone" id="zone-csv" onclick="document.getElementById('file-csv-input').click()">
+                        点击上传 CSV 文件 (.csv / .txt)
+                        <input type="file" id="file-csv-input" class="file-input" accept=".csv,.txt" onchange="onFileSelected(event,'csv')">
+                    </div>
+                    <div class="file-info" id="info-csv"></div>
+                </div>
+
+                <div id="source-shp" class="source-panel">
+                    <div class="hint" style="margin-top:0;margin-bottom:10px;">Shapefile 本地上传，支持 <code>.zip</code>（含 shp/dbf/shx）或单个 <code>.shp</code> 文件</div>
+                    <div class="upload-zone" id="zone-shp" onclick="document.getElementById('file-shp').click()">
+                        点击上传 Shapefile (.zip / .shp)
+                        <input type="file" id="file-shp" class="file-input" accept=".zip,.shp" onchange="onFileSelected(event,'shp')">
+                    </div>
+                    <div class="file-info" id="info-shp"></div>
+                </div>
+
+                <div id="source-wkt" class="source-panel">
+                    <div class="hint" style="margin-top:0;margin-bottom:10px;">输入 WKT 坐标串，支持 POINT / LINESTRING / POLYGON / MULTI* 等，多条用分号分隔</div>
+                    <textarea id="wkt-input" class="coord-textarea" style="min-height:160px" placeholder="POINT(116.397428 39.90923)&#10;LINESTRING(116.3 39.9, 116.4 39.95)&#10;POLYGON((116.3 39.9, 116.5 39.9, 116.5 40.0, 116.3 40.0, 116.3 39.9))"></textarea>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="toolbar">
+                    <div class="toolbar-left">
+                        <div class="panel-title" style="margin-bottom:0;border:none;padding:0;">转换结果</div>
+                        <div class="format-tabs" style="margin:0 0 0 12px;">
+                            <button class="format-tab preview-format-tab active" data-preview="geojson" onclick="switchPreviewFormat('geojson')">GeoJSON</button>
+                            <button class="format-tab preview-format-tab" data-preview="wkt" onclick="switchPreviewFormat('wkt')">WKT</button>
+                        </div>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn btn-success" onclick="exportFileResult('geojson')">导出 GeoJSON</button>
+                        <button class="btn btn-success" onclick="exportFileResult('json')">导出 JSON</button>
+                        <button class="btn btn-success" onclick="exportFileResult('csv')">导出 CSV</button>
+                        <button class="btn btn-warning" onclick="exportFileResult('shp')">导出 Shapefile</button>
+                        <button class="btn btn-default" onclick="copyFilePreview()">复制</button>
+                    </div>
+                </div>
+                <textarea id="file-preview" class="preview-box" readonly placeholder="转换结果将显示在这里"></textarea>
+                <div class="status-bar">
+                    <span id="file-status">请选择输入格式并加载数据</span>
+                    <span id="file-feature-count"></span>
+                </div>
+            </div>
+        </div><!-- tab-file -->
     </div>
 
     <div id="toast" class="toast"></div>
@@ -332,6 +472,192 @@
         const ALL_OUTPUT = '__ALL__';
         let rows = [];
         let lastResults = [];
+        let fileFormat = 'geojson';
+        let previewFormat = 'geojson';
+        let fileResult = null;
+        let fileInputCache = { geojson: null, json: null, csv: null, shp: null, wkt: null };
+
+        function switchPreviewFormat(format) {
+            previewFormat = format;
+            document.querySelectorAll('.preview-format-tab').forEach(function (t) {
+                t.classList.toggle('active', t.dataset.preview === format);
+            });
+            updateFilePreview();
+        }
+
+        function updateFilePreview() {
+            const el = document.getElementById('file-preview');
+            if (!fileResult) {
+                el.value = '';
+                el.placeholder = previewFormat === 'wkt'
+                    ? 'WKT 结果将显示在这里'
+                    : '转换结果将显示在这里（GeoJSON 格式）';
+                return;
+            }
+            if (previewFormat === 'wkt') {
+                el.value = CoordFileConverter.toWKT(fileResult);
+                el.placeholder = 'WKT 结果将显示在这里';
+            } else {
+                el.value = JSON.stringify(fileResult, null, 2);
+                el.placeholder = '转换结果将显示在这里（GeoJSON 格式）';
+            }
+        }
+
+        function switchMainTab(name) {
+            document.querySelectorAll('.tabs-wrap .tab').forEach(function (t) {
+                t.classList.toggle('active', t.dataset.tab === name);
+            });
+            document.querySelectorAll('.tab-body').forEach(function (b) {
+                b.classList.toggle('active', b.id === 'tab-' + name);
+            });
+        }
+
+        function switchFileFormat(format) {
+            fileFormat = format;
+            document.querySelectorAll('.format-tab').forEach(function (t) {
+                t.classList.toggle('active', t.dataset.format === format);
+            });
+            document.querySelectorAll('.source-panel').forEach(function (p) {
+                p.classList.toggle('active', p.id === 'source-' + format);
+            });
+        }
+
+        function initFileSelects() {
+            const inputCrs = document.getElementById('file-input-crs');
+            const outputCrs = document.getElementById('file-output-crs');
+            CRS_LIST.forEach(function (c) {
+                inputCrs.add(new Option(c.label, c.key));
+                outputCrs.add(new Option(c.label, c.key));
+            });
+            inputCrs.value = 'WGS84';
+            outputCrs.value = 'GCJ02';
+        }
+
+        function getFilePrecision() {
+            return parseInt(document.getElementById('file-precision').value, 10);
+        }
+
+        function setUploadZone(format, filename) {
+            const zone = document.getElementById('zone-' + format);
+            const info = document.getElementById('info-' + format);
+            if (!zone) return;
+            if (!zone.dataset.defaultText && zone.childNodes[0]) {
+                zone.dataset.defaultText = zone.childNodes[0].textContent.trim();
+            }
+            if (zone.childNodes[0]) {
+                zone.childNodes[0].textContent = filename
+                    ? ('已选择: ' + filename + '（点击重新选择）')
+                    : zone.dataset.defaultText;
+            }
+            zone.classList.toggle('has-file', !!filename);
+            if (info) info.textContent = filename ? '文件已就绪，点击「转换」执行坐标转换' : '';
+        }
+
+        function onFileSelected(event, format) {
+            const file = event.target.files[0];
+            if (!file) return;
+            fileInputCache[format] = file;
+            setUploadZone(format, file.name);
+            showToast('已选择文件: ' + file.name);
+        }
+
+        async function loadFromUrl(format) {
+            const urlInput = document.getElementById(format + '-url');
+            const url = urlInput && urlInput.value.trim();
+            if (!url) { showToast('请输入 URL'); return; }
+            try {
+                document.getElementById('file-status').textContent = '正在从 URL 加载...';
+                const data = await CoordFileConverter.fetchJsonFromUrl(url);
+                fileInputCache[format] = { url: url, data: data };
+                document.getElementById('info-' + format).textContent = '已从 URL 加载: ' + url;
+                showToast('URL 加载成功，点击「转换」');
+                document.getElementById('file-status').textContent = 'URL 数据已加载，待转换';
+            } catch (e) {
+                showToast('URL 加载失败: ' + e.message);
+                document.getElementById('file-status').textContent = 'URL 加载失败';
+            }
+        }
+
+        async function buildFileLoadOptions() {
+            const fromCrs = document.getElementById('file-input-crs').value;
+            const toCrs = document.getElementById('file-output-crs').value;
+            const precision = getFilePrecision();
+            const base = { type: fileFormat, fromCrs: fromCrs, toCrs: toCrs, precision: precision };
+
+            if (fileFormat === 'wkt') {
+                return Object.assign(base, { text: document.getElementById('wkt-input').value });
+            }
+            if (fileFormat === 'csv') {
+                const cached = fileInputCache.csv;
+                if (!cached) throw new Error('请上传 CSV 文件');
+                return Object.assign(base, { text: await cached.text() });
+            }
+            if (fileFormat === 'shp') {
+                const cached = fileInputCache.shp;
+                if (!cached) throw new Error('请上传 Shapefile');
+                return Object.assign(base, { file: cached });
+            }
+            if (fileFormat === 'geojson' || fileFormat === 'json') {
+                const cached = fileInputCache[fileFormat];
+                if (cached && cached.url && cached.data) {
+                    return Object.assign(base, { url: cached.url });
+                }
+                if (cached && cached instanceof File) {
+                    return Object.assign(base, { text: await cached.text() });
+                }
+                const url = document.getElementById(fileFormat + '-url').value.trim();
+                if (url) return Object.assign(base, { url: url });
+                throw new Error('请上传文件或输入 URL');
+            }
+            throw new Error('未知格式');
+        }
+
+        async function convertFile() {
+            try {
+                document.getElementById('file-status').textContent = '正在转换...';
+                const opts = await buildFileLoadOptions();
+                if (opts.url && !fileInputCache[fileFormat]?.data) {
+                    fileResult = await CoordFileConverter.loadInput(opts);
+                } else if (fileInputCache[fileFormat]?.data && (fileFormat === 'geojson' || fileFormat === 'json')) {
+                    const fc = CoordFileConverter.normalizeToFeatureCollection(fileInputCache[fileFormat].data);
+                    fileResult = CoordFileConverter.transformGeoJSON(fc, opts.fromCrs, opts.toCrs, opts.precision);
+                } else {
+                    fileResult = await CoordFileConverter.loadInput(opts);
+                }
+                updateFilePreview();
+                const count = fileResult.features ? fileResult.features.length : 0;
+                document.getElementById('file-feature-count').textContent = '共 ' + count + ' 个要素';
+                document.getElementById('file-status').textContent =
+                    '转换完成: ' + opts.fromCrs + ' → ' + opts.toCrs;
+                showToast('文件转换成功');
+            } catch (e) {
+                console.error(e);
+                document.getElementById('file-status').textContent = '转换失败: ' + e.message;
+                showToast('转换失败: ' + e.message);
+            }
+        }
+
+        async function exportFileResult(format) {
+            if (!fileResult) { showToast('请先执行转换'); return; }
+            try {
+                const name = 'converted_' + document.getElementById('file-output-crs').value.toLowerCase();
+                if (format === 'geojson') CoordFileConverter.exportGeoJSON(fileResult, name + '.geojson');
+                else if (format === 'json') CoordFileConverter.exportJSON(fileResult, name + '.json');
+                else if (format === 'csv') CoordFileConverter.exportCSV(fileResult, name + '.csv');
+                else if (format === 'shp') await CoordFileConverter.exportShapefile(fileResult, name);
+                showToast('导出成功');
+            } catch (e) {
+                showToast('导出失败: ' + e.message);
+            }
+        }
+
+        function copyFilePreview() {
+            const text = document.getElementById('file-preview').value;
+            if (!text) { showToast('没有可复制的内容'); return; }
+            navigator.clipboard.writeText(text).then(function () {
+                showToast('已复制到剪贴板');
+            }).catch(function () { showToast('复制失败'); });
+        }
 
         function initSelects() {
             const inputCrs = document.getElementById('input-crs');
@@ -781,6 +1107,7 @@
         }
 
         initSelects();
+        initFileSelects();
         document.getElementById('coord-input').value = '116.397428 39.90923\n116.404 39.915\n116.5，39.6';
         updateInputLineCount();
         renderTable();
