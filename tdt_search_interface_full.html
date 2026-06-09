@@ -3,11 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>天地图企业搜索</title>
+    <title>天地图搜索</title>
     <script src="ol.js"></script>
     <link rel="stylesheet" href="ol.css">
     <script src="gcoord.global.prod.js"></script>
     <script src="region_data.js"></script>
+    <script src="https://unpkg.com/shpjs@4.0.4/dist/shp.min.js"></script>
+    <script src="https://unpkg.com/wellknown@0.5.0/wellknown.js"></script>
+    <script src="coord_file_converter.js"></script>
+    <script src="tdt_layer_manager.js"></script>
     <style>
         body { margin: 0; padding: 0; height: 100vh; font-family: 'Microsoft YaHei', Arial, sans-serif; overflow: hidden; }
         #map { width: 100%; height: 100%; position: relative; }
@@ -30,6 +34,75 @@
         body.panel-open #toggle-panel { right: 440px; }
         body:not(.panel-open) #toggle-panel { right: 0; }
         #toggle-panel:hover { background: #f5f5f5; }
+        #layer-panel {
+            width: 380px; background: #fff; border-right: 1px solid #ddd; padding: 16px;
+            display: flex; flex-direction: column; box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            overflow: hidden; transition: width 0.3s ease;
+            position: absolute; left: 0; top: 0; bottom: 0; z-index: 999;
+        }
+        #layer-panel.collapsed { width: 0; padding: 0; border: none; box-shadow: none; overflow: visible; }
+        #toggle-layer-panel {
+            position: absolute; top: 50%; transform: translateY(-50%);
+            width: 20px; height: 70px; background: #fff; border: 1px solid #ddd;
+            border-left: none; border-radius: 0 4px 4px 0; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; color: #666; z-index: 1001;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+            transition: left 0.3s ease;
+        }
+        body.layer-panel-open #toggle-layer-panel { left: 380px; }
+        body:not(.layer-panel-open) #toggle-layer-panel { left: 0; }
+        #toggle-layer-panel:hover { background: #f5f5f5; }
+        #layer-panel .panel-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; min-width: 348px; }
+        #layer-panel.collapsed .panel-content { display: none; }
+        .layer-add-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+        .layer-add-tab {
+            padding: 5px 12px; border: 1px solid #dcdfe6; background: #fff;
+            border-radius: 4px; cursor: pointer; font-size: 12px; color: #606266;
+        }
+        .layer-add-tab.active { background: #409eff; color: #fff; border-color: #409eff; }
+        .layer-add-panel { display: none; }
+        .layer-add-panel.active { display: block; }
+        .layer-field { margin-bottom: 10px; }
+        .layer-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 4px; }
+        .layer-field input, .layer-field select, .layer-field textarea {
+            width: 100%; padding: 6px 8px; border: 1px solid #dcdfe6; border-radius: 4px;
+            font-size: 13px; box-sizing: border-box; outline: none;
+        }
+        .layer-field textarea { min-height: 80px; resize: vertical; font-family: Consolas, monospace; font-size: 12px; }
+        .layer-field textarea.layer-code { min-height: 180px; }
+        .import-type-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+        .import-type-btn {
+            padding: 4px 10px; border: 1px solid #dcdfe6; background: #fff;
+            border-radius: 4px; cursor: pointer; font-size: 12px;
+        }
+        .import-type-btn.active { background: #67c23a; color: #fff; border-color: #67c23a; }
+        .layer-btn {
+            width: 100%; padding: 8px; border: none; border-radius: 4px;
+            background: #409eff; color: #fff; cursor: pointer; font-size: 13px; margin-top: 6px;
+        }
+        .layer-btn:hover { background: #66b1ff; }
+        .layer-list-wrap { flex: 1; display: flex; flex-direction: column; min-height: 120px; margin-top: 12px; border-top: 1px solid #eee; padding-top: 12px; }
+        .layer-list-title { font-size: 14px; color: #333; margin-bottom: 8px; font-weight: bold; }
+        #layer-list { flex: 1; overflow-y: auto; max-height: 240px; border: 1px solid #eee; border-radius: 4px; }
+        .layer-empty { padding: 20px; text-align: center; color: #999; font-size: 12px; }
+        .layer-item {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 10px; border-bottom: 1px solid #f5f5f5; font-size: 13px;
+        }
+        .layer-item:last-child { border-bottom: none; }
+        .layer-item-main { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; cursor: pointer; }
+        .layer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .layer-type { font-size: 11px; color: #909399; background: #f4f4f5; padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
+        .layer-del {
+            border: none; background: transparent; color: #f56c6c; cursor: pointer;
+            font-size: 16px; line-height: 1; padding: 0 4px; flex-shrink: 0;
+        }
+        .layer-del:hover { color: #f78989; }
+        body.layer-panel-open #toolbar { left: 410px; }
+        body.layer-panel-open #coord-input-panel,
+        body.layer-panel-open #pick-result-panel { left: 450px; }
+        body:not(.layer-panel-open) #toolbar { left: 30px; }
         .panel-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; min-width: 360px; }
         #search-panel.collapsed .panel-content { display: none; }
         .panel-title { margin-bottom: 15px; color: #333; font-size: 16px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
@@ -37,9 +110,11 @@
         .search-mode { margin-bottom: 15px; }
         .search-mode label { margin-right: 15px; cursor: pointer; }
         #page-count { width: 40px; margin-left: 10px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size: 13px; display: none; }
-        .region-select { margin-bottom: 15px; }
-        .region-select label { display: block; font-size: 12px; color: #606266; margin-bottom: 4px; }
-        .region-select select { width: 100%; padding: 6px 8px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; margin-bottom: 8px; outline: none; }
+        .region-select { margin-bottom: 15px;     display: inline-block;
+   }
+        .region-select label { display: inline-block;  font-size: 12px; color: #606266; margin-bottom: 4px; }
+        .region-select select { width: 100%; padding: 6px 8px; border: 1px solid #dcdfe6; border-radius: 4px; font-size: 13px; margin-bottom: 8px; outline: none;     display: inline-block;
+    width: 100px;}
         .region-select select:last-child { margin-bottom: 0; }
         .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
         .btn-group button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
@@ -60,7 +135,7 @@
         #popup-close { position: absolute; top: 8px; right: 10px; width: 20px; height: 20px; line-height: 18px; text-align: center; border-radius: 50%; background: #f5f5f5; cursor: pointer; font-size: 14px; color: #999; }
         #popup-title { font-weight: bold; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #eee; font-size: 14px; color: #333; padding-right: 20px; }
         #popup-content { font-size: 13px; color: #666; line-height: 1.6; }
-        #toolbar { position: absolute; top: 10px; left: 10px; background: rgba(255,255,255,0.95); border-radius: 4px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; }
+        #toolbar { position: absolute; top: 10px; left: 30px; background: rgba(255,255,255,0.95); border-radius: 4px; padding: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; transition: left 0.3s ease; }
         .tool-btn { display: block; width: 36px; height: 36px; line-height: 36px; text-align: center; margin-bottom: 5px; border: none; background: #fff; border-radius: 4px; cursor: pointer; font-size: 16px; }
         .tool-btn:hover { background: #f0f0f0; }
         .tool-btn.active { background: #409eff; color: #fff; }
@@ -96,6 +171,114 @@
 </head>
 <body class="panel-open">
     <div id="map"></div>
+
+    <div id="toggle-layer-panel" onclick="toggleLayerPanel()">›</div>
+
+    <div id="layer-panel" class="collapsed">
+        <div class="panel-content">
+            <h3 class="panel-title">图层管理</h3>
+            <div class="layer-add-tabs">
+                <button type="button" class="layer-add-tab active" data-tab="import" onclick="TdtLayerManager.switchAddTab('import')">导入</button>
+                <button type="button" class="layer-add-tab" data-tab="url" onclick="TdtLayerManager.switchAddTab('url')">URL</button>
+                <button type="button" class="layer-add-tab" data-tab="custom" onclick="TdtLayerManager.switchAddTab('custom')">自定义</button>
+            </div>
+
+            <div id="layer-add-import" class="layer-add-panel active">
+                <div class="import-type-row">
+                    <button type="button" class="import-type-btn active" data-import="csv" onclick="TdtLayerManager.switchImportType('csv')">CSV(点)</button>
+                    <button type="button" class="import-type-btn" data-import="shp" onclick="TdtLayerManager.switchImportType('shp')">Shapefile</button>
+                    <button type="button" class="import-type-btn" data-import="json" onclick="TdtLayerManager.switchImportType('json')">JSON</button>
+                    <button type="button" class="import-type-btn" data-import="geojson" onclick="TdtLayerManager.switchImportType('geojson')">GeoJSON</button>
+                    <button type="button" class="import-type-btn" data-import="wkt" onclick="TdtLayerManager.switchImportType('wkt')">WKT</button>
+                </div>
+                <div class="layer-field" id="layer-import-file-box">
+                    <label>选择文件</label>
+                    <input type="file" id="layer-import-file" accept=".csv,.zip,.shp,.json,.geojson">
+                </div>
+                <div class="layer-field" id="layer-import-text-box" style="display:none;">
+                    <label>文本内容</label>
+                    <textarea id="layer-import-text" placeholder="粘贴 GeoJSON / JSON / WKT"></textarea>
+                </div>
+                <div class="layer-field">
+                    <label>图层名称</label>
+                    <input type="text" id="layer-import-name" placeholder="可选，默认自动生成">
+                </div>
+                <button type="button" class="layer-btn" onclick="submitLayerImport()">添加图层</button>
+            </div>
+
+            <div id="layer-add-url" class="layer-add-panel">
+                <div class="layer-field">
+                    <label>服务类型</label>
+                    <select id="layer-url-type" onchange="TdtLayerManager.updateUrlFormVisibility(this.value)">
+                        <option value="xyz">XYZ（十进制 {z}/{x}/{y}）</option>
+                        <option value="xyz_hex">XYZ（十六进制 ArcGIS 缓存）</option>
+                        <option value="wms">WMS</option>
+                        <option value="wmts">WMTS</option>
+                        <option value="vectortile">VectorTile (MVT)</option>
+                        <option value="arcgis">ArcGIS Server</option>
+                    </select>
+                </div>
+                <div class="layer-field">
+                    <label>服务 URL</label>
+                    <span id="">
+                    	http://ip/youname/Layers/_alllayers/
+                    	http://ip/arcgis/rest/services/youname/MapServer/tile/{z}/{y}/{x}
+                    </span>
+                    <input type="text" id="layer-url-base" placeholder="https://.../{z}/{x}/{y} 或 WMS/WMTS 地址">
+                </div>
+                <div class="layer-field url-opt url-opt-proj" style="display:block;">
+                    <label>坐标系</label>
+                    <select id="layer-url-projection">
+                        <option value="EPSG:4326">EPSG:4326</option>
+                        <option value="EPSG:3857">EPSG:3857</option>
+                    </select>
+                </div>
+                <div class="layer-field url-opt url-opt-proj-vt" style="display:none;">
+                    <label>VectorTile 坐标系</label>
+                    <select id="layer-url-projection-vt">
+                        <option value="EPSG:3857">EPSG:3857</option>
+                        <option value="EPSG:4326">EPSG:4326</option>
+                    </select>
+                </div>
+                <div class="layer-field url-opt url-opt-wms" style="display:none;">
+                    <label>WMS LAYERS</label>
+                    <input type="text" id="layer-url-wms-layers" placeholder="图层名，多个用逗号分隔">
+                </div>
+                <div class="layer-field url-opt url-opt-wmts" style="display:none;">
+                    <label>WMTS 图层名</label>
+                    <input type="text" id="layer-url-wmts-layer" placeholder="layer">
+                    <label style="margin-top:8px;">MatrixSet</label>
+                    <input type="text" id="layer-url-wmts-matrix" value="EPSG:4326" placeholder="EPSG:4326">
+                    <label style="margin-top:8px;">Format</label>
+                    <input type="text" id="layer-url-wmts-format" value="image/png">
+                    <label style="margin-top:8px;">Style</label>
+                    <input type="text" id="layer-url-wmts-style" value="default">
+                </div>
+                <div class="layer-field">
+                    <label>图层名称</label>
+                    <input type="text" id="layer-url-name" placeholder="可选">
+                </div>
+                <button type="button" class="layer-btn" onclick="submitLayerUrl()">添加图层</button>
+            </div>
+
+            <div id="layer-add-custom" class="layer-add-panel">
+                <div class="layer-field">
+                    <label>图层构造代码（return ol.layer.*）</label>
+                    <textarea id="layer-custom-code" class="layer-code"></textarea>
+                </div>
+                <div class="layer-field">
+                    <label>图层名称</label>
+                    <input type="text" id="layer-custom-name" placeholder="可选">
+                </div>
+                <button type="button" class="layer-btn" onclick="submitLayerCustom()">确定添加</button>
+            </div>
+
+            <div class="layer-list-wrap">
+                <div class="layer-list-title">图层列表</div>
+                <div id="layer-list"></div>
+            </div>
+        </div>
+    </div>
 
     <div id="toolbar">
         <button class="tool-btn" onclick="showCoordInput()" title="坐标定位">📍</button>
@@ -144,14 +327,14 @@
 
     <div id="search-panel">
         <div class="panel-content">
-            <h3 class="panel-title">企业名称搜索</h3>
+            <h3 class="panel-title">名称搜索</h3>
             <div class="region-select">
                 <label for="province-select">省份</label>
                 <select id="province-select"></select>
                 <label for="city-select">地市</label>
                 <select id="city-select"></select>
             </div>
-            <textarea id="company-names" placeholder="输入企业名称，多个用逗号隔开&#10;&#10;支持中文逗号和英文逗号&#10;&#10;例如：陕西环信，华为技术有限公司，西安比亚迪"></textarea>
+            <textarea id="company-names" placeholder="输入名称，多个用逗号隔开&#10;&#10;支持中文逗号和英文逗号&#10;&#10;例如：陕西环信，华为技术有限公司，西安比亚迪"></textarea>
             <div class="search-mode">
                 <label><input type="radio" name="search-mode" value="one" checked onchange="changeSearchMode()"> 单个（第一条）</label>
                 <label><input type="radio" name="search-mode" value="all" onchange="changeSearchMode()"> 全部（所有结果）</label>
@@ -195,6 +378,7 @@
         let labelLayer = null;
         let selectedFeature = null;
         let isPanelCollapsed = false;
+        let isLayerPanelCollapsed = true;
         let isPickMode = false;
         let isRangingMode = false;
         let drawInteraction = null;
@@ -364,8 +548,54 @@
             setTimeout(function() { map.updateSize(); }, 350);
         }
 
+        function toggleLayerPanel() {
+            const panel = document.getElementById('layer-panel');
+            const toggleBtn = document.getElementById('toggle-layer-panel');
+            isLayerPanelCollapsed = !isLayerPanelCollapsed;
+
+            if (isLayerPanelCollapsed) {
+                panel.classList.add('collapsed');
+                toggleBtn.innerHTML = '›';
+                document.body.classList.remove('layer-panel-open');
+            } else {
+                panel.classList.remove('collapsed');
+                toggleBtn.innerHTML = '‹';
+                document.body.classList.add('layer-panel-open');
+            }
+            setTimeout(function() { map.updateSize(); }, 350);
+        }
+
         function getMapFitPadding() {
-            return [50, 50, 50, isPanelCollapsed ? 50 : 420];
+            const left = isLayerPanelCollapsed ? 50 : 400;
+            const right = isPanelCollapsed ? 50 : 420;
+            return [50, right, 50, left];
+        }
+
+        async function submitLayerImport() {
+            try {
+                await TdtLayerManager.handleImportSubmit();
+                alert('图层添加成功');
+            } catch (e) {
+                alert('添加失败: ' + e.message);
+            }
+        }
+
+        function submitLayerUrl() {
+            try {
+                TdtLayerManager.handleUrlSubmit();
+                alert('图层添加成功');
+            } catch (e) {
+                alert('添加失败: ' + e.message);
+            }
+        }
+
+        function submitLayerCustom() {
+            try {
+                TdtLayerManager.handleCustomSubmit();
+                alert('图层添加成功');
+            } catch (e) {
+                alert('添加失败: ' + e.message);
+            }
         }
 
         function getBoundaryUrl(adcode) {
@@ -717,10 +947,10 @@
             const countInput = document.getElementById('page-count');
             const count = searchMode === 'one' ? 1 : (parseInt(countInput.value) || 10);
 
-            if (!input) { alert('请输入企业名称'); return; }
+            if (!input) { alert('请输入名称'); return; }
 
             const names = input.split(/[,，\n\r]+/).map(function(n) { return n.trim(); }).filter(function(n) { return n; });
-            if (names.length === 0) { alert('请输入有效的企业名称'); return; }
+            if (names.length === 0) { alert('请输入有效的名称'); return; }
 
             searchResults = [];
             allResults = [];
@@ -909,6 +1139,10 @@
         }
 
         map = initMap();
+        TdtLayerManager.init(map, 'layer-list');
+        document.getElementById('layer-custom-code').value = TdtLayerManager.getDefaultCustomCode();
+        TdtLayerManager.updateUrlFormVisibility(document.getElementById('layer-url-type').value);
+        TdtLayerManager.switchImportType('csv');
         RegionData.initSelects('province-select', 'city-select', RegionData.DEFAULT_PROVINCE);
         initRegionBoundaryEvents();
         updateRegionBoundary(false);

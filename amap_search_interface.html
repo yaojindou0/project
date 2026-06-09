@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>高德地图企业搜索</title>
+    <title>高德地图搜索</title>
     <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=75bc5538c1031c7abe45df341c993fb8&plugin=AMap.Geocoder,AMap.RangingTool"></script>
     <script type="text/javascript" src="gcoord.global.prod.js"></script>
     <script type="text/javascript" src="region_data.js"></script>
@@ -127,14 +127,14 @@
     <div id="search-panel">
     
         <div class="panel-content">
-            <h3 class="panel-title">企业名称搜索</h3>
+            <h3 class="panel-title">名称搜索</h3>
             <div class="region-select">
                 <label for="province-select">省份</label>
                 <select id="province-select"></select>
                 <label for="city-select">地市</label>
                 <select id="city-select"></select>
             </div>
-            <textarea id="company-names" placeholder="输入企业名称，多个用逗号隔开或换行&#10;&#10;支持：中文逗号、英文逗号、换行&#10;&#10;例如：陕西环信，华为技术有限公司&#10;西安比亚迪"></textarea>
+            <textarea id="company-names" placeholder="输入名称，多个用逗号隔开或换行&#10;&#10;支持：中文逗号、英文逗号、换行&#10;&#10;例如：陕西环信，华为技术有限公司&#10;西安比亚迪"></textarea>
             <div class="search-mode">
                 <label>
                     <input type="radio" name="search-mode" value="one" checked onchange="changeSearchMode()"> 单个（第一条）
@@ -206,7 +206,7 @@
 
             map = new AMap.Map('map', {
                 center: [108.95, 34.27],
-                zoom: 12,
+                zoom: 8,
                 resizeEnable: true,
                 layers: [normalLayer],
                 features: ['bg', 'road', 'building', 'point']
@@ -537,14 +537,14 @@
             const count = searchMode === 'one' ? 1 : (parseInt(countInput.value) || 10);
 
             if (!input) {
-                alert('请输入企业名称');
+                alert('请输入名称');
                 return;
             }
 
             const names = input.split(/[,，\n\r]+/).map(n => n.trim()).filter(n => n);
 
             if (names.length === 0) {
-                alert('请输入有效的企业名称');
+                alert('请输入有效的名称');
                 return;
             }
 
