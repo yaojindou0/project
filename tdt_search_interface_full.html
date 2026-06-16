@@ -3,15 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+   
     <title>天地图搜索</title>
     <script src="ol.js"></script>
     <link rel="stylesheet" href="ol.css">
     <script src="gcoord.global.prod.js"></script>
     <script src="region_data.js"></script>
-    <script src="https://unpkg.com/shpjs@4.0.4/dist/shp.min.js"></script>
-    <script src="https://unpkg.com/wellknown@0.5.0/wellknown.js"></script>
+    <script src="shp.min.js"></script>
+    <script src="wellknown.js"></script>
+    <script src="turf.min.js"></script>
     <script src="coord_file_converter.js"></script>
     <script src="tdt_layer_manager.js"></script>
+    <script src="kriging.js"></script>
+    <script src="tdt_spatial_analysis.js"></script>
+    <script src="tdt_vehicle_track.js"></script>
     <style>
         body { margin: 0; padding: 0; height: 100vh; font-family: 'Microsoft YaHei', Arial, sans-serif; overflow: hidden; }
         #map { width: 100%; height: 100%; position: relative; }
@@ -24,84 +29,212 @@
         #search-panel.collapsed { width: 0; padding: 0; border: none; box-shadow: none; overflow: visible; }
         #toggle-panel {
             position: absolute; top: 50%; transform: translateY(-50%);
-            width: 20px; height: 70px; background: #fff; border: 1px solid #ddd;
-            border-right: none; border-radius: 4px 0 0 4px; cursor: pointer;
+            width: 22px; height: 72px; background: #fff; border: 1px solid #e4e7ed;
+            border-right: none; border-radius: 6px 0 0 6px; cursor: pointer;
             display: flex; align-items: center; justify-content: center;
-            font-size: 18px; color: #666; z-index: 1001;
-            box-shadow: -2px 0 5px rgba(0,0,0,0.1);
-            transition: right 0.3s ease;
+            font-size: 16px; color: #909399; z-index: 1001;
+            box-shadow: -2px 0 8px rgba(0,0,0,0.06);
+            transition: right 0.3s ease, color 0.2s, background 0.2s;
         }
-        body.panel-open #toggle-panel { right: 440px; }
+        body.panel-open #toggle-panel { right: 437px; }
         body:not(.panel-open) #toggle-panel { right: 0; }
-        #toggle-panel:hover { background: #f5f5f5; }
+        #toggle-panel:hover { background: #ecf5ff; color: #409eff; border-color: #b3d8ff; }
         #layer-panel {
-            width: 380px; background: #fff; border-right: 1px solid #ddd; padding: 16px;
-            display: flex; flex-direction: column; box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+            width: 400px; background: #f5f7fa; border-right: 1px solid #e4e7ed;
+            display: flex; flex-direction: column;
+            box-shadow: 2px 0 16px rgba(0,0,0,0.08);
             overflow: hidden; transition: width 0.3s ease;
             position: absolute; left: 0; top: 0; bottom: 0; z-index: 999;
         }
         #layer-panel.collapsed { width: 0; padding: 0; border: none; box-shadow: none; overflow: visible; }
         #toggle-layer-panel {
             position: absolute; top: 50%; transform: translateY(-50%);
-            width: 20px; height: 70px; background: #fff; border: 1px solid #ddd;
-            border-left: none; border-radius: 0 4px 4px 0; cursor: pointer;
+            width: 22px; height: 72px; background: #fff; border: 1px solid #e4e7ed;
+            border-left: none; border-radius: 0 6px 6px 0; cursor: pointer;
             display: flex; align-items: center; justify-content: center;
-            font-size: 18px; color: #666; z-index: 1001;
-            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-            transition: left 0.3s ease;
+            font-size: 16px; color: #909399; z-index: 1001;
+            box-shadow: 2px 0 8px rgba(0,0,0,0.06);
+            transition: left 0.3s ease, color 0.2s, background 0.2s;
         }
-        body.layer-panel-open #toggle-layer-panel { left: 380px; }
+        body.layer-panel-open #toggle-layer-panel { left: 400px; }
         body:not(.layer-panel-open) #toggle-layer-panel { left: 0; }
-        #toggle-layer-panel:hover { background: #f5f5f5; }
-        #layer-panel .panel-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; min-width: 348px; }
+        #toggle-layer-panel:hover { background: #ecf5ff; color: #409eff; border-color: #b3d8ff; }
+        #layer-panel .panel-content {
+            flex: 1; display: flex; flex-direction: column; overflow: hidden;
+            min-width: 368px; padding: 0;
+        }
         #layer-panel.collapsed .panel-content { display: none; }
+        .left-panel-header {
+            padding: 14px 16px 12px; background: linear-gradient(135deg, #409eff 0%, #337ecc 100%);
+            color: #fff; flex-shrink: 0;
+        }
+        .left-panel-header h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.5px; }
+        .left-panel-header p { margin: 4px 0 0; font-size: 11px; opacity: 0.85; }
+        .left-panel-tabs {
+            display: flex; gap: 6px; padding: 10px 12px 0; background: #fff;
+            border-bottom: 1px solid #ebeef5; flex-shrink: 0;
+        }
+        .left-panel-tab {
+            flex: 1; padding: 8px 4px; border: none; background: transparent; cursor: pointer;
+            font-size: 12px; color: #606266; border-radius: 6px 6px 0 0;
+            transition: color 0.2s, background 0.2s; position: relative;
+        }
+        .left-panel-tab:hover { color: #409eff; background: #f5f7fa; }
+        .left-panel-tab.active {
+            color: #409eff; font-weight: 600; background: #ecf5ff;
+        }
+        .left-panel-tab.active::after {
+            content: ''; position: absolute; left: 12px; right: 12px; bottom: 0;
+            height: 2px; background: #409eff; border-radius: 1px;
+        }
+        .left-tab-panel {
+            display: none; flex: 1; flex-direction: column; overflow-y: auto;
+            min-height: 0; padding: 12px; gap: 10px;
+        }
+        .left-tab-panel.active { display: flex; }
+        .left-tab-panel::-webkit-scrollbar { width: 5px; }
+        .left-tab-panel::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 3px; }
+        .left-section {
+            background: #fff; border-radius: 8px; padding: 12px;
+            border: 1px solid #ebeef5; box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+        }
+        .left-section-title {
+            font-size: 13px; font-weight: 600; color: #303133;
+            margin: 0 0 10px; padding-bottom: 8px; border-bottom: 1px solid #f0f2f5;
+        }
         .layer-add-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
         .layer-add-tab {
-            padding: 5px 12px; border: 1px solid #dcdfe6; background: #fff;
-            border-radius: 4px; cursor: pointer; font-size: 12px; color: #606266;
+            padding: 5px 14px; border: 1px solid #e4e7ed; background: #f5f7fa;
+            border-radius: 16px; cursor: pointer; font-size: 12px; color: #606266;
+            transition: all 0.2s;
         }
+        .layer-add-tab:hover { border-color: #c6e2ff; color: #409eff; }
         .layer-add-tab.active { background: #409eff; color: #fff; border-color: #409eff; }
         .layer-add-panel { display: none; }
         .layer-add-panel.active { display: block; }
         .layer-field { margin-bottom: 10px; }
-        .layer-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 4px; }
+        .layer-field:last-child { margin-bottom: 0; }
+        .layer-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 5px; font-weight: 500; }
         .layer-field input, .layer-field select, .layer-field textarea {
-            width: 100%; padding: 6px 8px; border: 1px solid #dcdfe6; border-radius: 4px;
+            width: 100%; padding: 7px 10px; border: 1px solid #dcdfe6; border-radius: 6px;
             font-size: 13px; box-sizing: border-box; outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s; background: #fff;
+        }
+        .layer-field input:focus, .layer-field select:focus, .layer-field textarea:focus {
+            border-color: #409eff; box-shadow: 0 0 0 2px rgba(64,158,255,0.15);
         }
         .layer-field textarea { min-height: 80px; resize: vertical; font-family: Consolas, monospace; font-size: 12px; }
-        .layer-field textarea.layer-code { min-height: 180px; }
+        .layer-field textarea.layer-code { min-height: 160px; }
         .import-type-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
         .import-type-btn {
-            padding: 4px 10px; border: 1px solid #dcdfe6; background: #fff;
-            border-radius: 4px; cursor: pointer; font-size: 12px;
+            padding: 4px 10px; border: 1px solid #e4e7ed; background: #f5f7fa;
+            border-radius: 14px; cursor: pointer; font-size: 11px; color: #606266;
+            transition: all 0.2s;
         }
+        .import-type-btn:hover { border-color: #c2e7b0; color: #67c23a; }
         .import-type-btn.active { background: #67c23a; color: #fff; border-color: #67c23a; }
         .layer-btn {
-            width: 100%; padding: 8px; border: none; border-radius: 4px;
-            background: #409eff; color: #fff; cursor: pointer; font-size: 13px; margin-top: 6px;
+            width: 100%; padding: 9px; border: none; border-radius: 6px;
+            background: #409eff; color: #fff; cursor: pointer; font-size: 13px; margin-top: 8px;
+            font-weight: 500; transition: background 0.2s;
         }
         .layer-btn:hover { background: #66b1ff; }
-        .layer-list-wrap { flex: 1; display: flex; flex-direction: column; min-height: 120px; margin-top: 12px; border-top: 1px solid #eee; padding-top: 12px; }
-        .layer-list-title { font-size: 14px; color: #333; margin-bottom: 8px; font-weight: bold; }
-        #layer-list { flex: 1; overflow-y: auto; max-height: 240px; border: 1px solid #eee; border-radius: 4px; }
-        .layer-empty { padding: 20px; text-align: center; color: #999; font-size: 12px; }
+        .layer-list-wrap { flex: 1; display: flex; flex-direction: column; min-height: 100px; }
+        .layer-list-title { font-size: 13px; color: #303133; margin-bottom: 8px; font-weight: 600; }
+        #layer-list { flex: 1; overflow-y: auto; max-height: 320px; border: 1px solid #ebeef5; border-radius: 6px; background: #fafbfc; }
+        .layer-empty { padding: 24px 16px; text-align: center; color: #c0c4cc; font-size: 12px; }
         .layer-item {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 8px 10px; border-bottom: 1px solid #f5f5f5; font-size: 13px;
+            padding: 8px 10px; border-bottom: 1px solid #f0f2f5; font-size: 13px;
+            transition: background 0.15s;
         }
+        .layer-item:hover { background: #f5f7fa; }
         .layer-item:last-child { border-bottom: none; }
-        .layer-item-main { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; cursor: pointer; }
-        .layer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .layer-type { font-size: 11px; color: #909399; background: #f4f4f5; padding: 1px 6px; border-radius: 3px; flex-shrink: 0; }
+        .layer-item-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+        .layer-item-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
+        .layer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #303133; }
+        .layer-type { font-size: 10px; color: #909399; background: #f0f2f5; padding: 2px 7px; border-radius: 10px; flex-shrink: 0; }
+        .layer-order-btns { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+        .layer-order-btn {
+            border: 1px solid #e4e7ed; background: #fff; color: #606266; cursor: pointer;
+            font-size: 10px; line-height: 1; padding: 3px 5px; border-radius: 4px;
+        }
+        .layer-order-btn:hover:not(:disabled) { background: #ecf5ff; color: #409eff; border-color: #b3d8ff; }
+        .layer-order-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .layer-del {
             border: none; background: transparent; color: #f56c6c; cursor: pointer;
-            font-size: 16px; line-height: 1; padding: 0 4px; flex-shrink: 0;
+            font-size: 16px; line-height: 1; padding: 2px 6px; flex-shrink: 0; border-radius: 4px;
         }
-        .layer-del:hover { color: #f78989; }
-        body.layer-panel-open #toolbar { left: 410px; }
+        .layer-del:hover { background: #fef0f0; color: #f78989; }
+        .layer-opacity-row {
+            display: flex; align-items: center; gap: 8px; margin-top: 6px; padding-left: 22px;
+        }
+        .layer-opacity-label { font-size: 11px; color: #909399; flex-shrink: 0; width: 36px; }
+        .layer-opacity-slider { flex: 1; min-width: 0; height: 4px; cursor: pointer; accent-color: #409eff; }
+        .layer-opacity-value { font-size: 11px; color: #606266; width: 34px; text-align: right; flex-shrink: 0; }
+        .layer-settings-btn {
+            border: 1px solid #e4e7ed; background: #fff; color: #606266; cursor: pointer;
+            font-size: 13px; line-height: 1; padding: 3px 6px; border-radius: 4px; flex-shrink: 0;
+        }
+        .layer-settings-btn:hover:not(:disabled) { background: #ecf5ff; color: #409eff; border-color: #b3d8ff; }
+        .layer-settings-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .layer-style-modal {
+            display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+            z-index: 2000; align-items: center; justify-content: center; padding: 20px;
+        }
+        .layer-style-modal.show { display: flex; }
+        .layer-style-dialog {
+            width: 420px; max-width: 100%; max-height: 85vh; background: #fff; border-radius: 10px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.18); display: flex; flex-direction: column; overflow: hidden;
+        }
+        .layer-style-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 16px; border-bottom: 1px solid #ebeef5; background: #f5f7fa;
+        }
+        .layer-style-header h3 { margin: 0; font-size: 15px; color: #303133; }
+        .layer-style-close {
+            border: none; background: transparent; font-size: 20px; color: #909399;
+            cursor: pointer; line-height: 1; padding: 0 4px;
+        }
+        .layer-style-close:hover { color: #606266; }
+        .layer-style-body { padding: 12px 16px; overflow-y: auto; flex: 1; }
+        .style-section {
+            margin-bottom: 14px; padding: 12px; border: 1px solid #ebeef5;
+            border-radius: 8px; background: #fafbfc;
+        }
+        .style-section-title {
+            font-size: 13px; font-weight: 600; color: #303133; margin: 0 0 10px;
+            padding-bottom: 8px; border-bottom: 1px solid #f0f2f5;
+        }
+        .style-field { margin-bottom: 10px; }
+        .style-field:last-child { margin-bottom: 0; }
+        .style-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 4px; }
+        .style-field input[type="text"],
+        .style-field input[type="number"],
+        .style-field select {
+            width: 100%; padding: 6px 8px; border: 1px solid #dcdfe6; border-radius: 6px;
+            font-size: 13px; box-sizing: border-box;
+        }
+        .style-field input[type="color"] { width: 100%; height: 32px; padding: 2px; border: 1px solid #dcdfe6; border-radius: 6px; cursor: pointer; }
+        .style-row { display: flex; gap: 10px; }
+        .style-row .style-field { flex: 1; }
+        .style-radio-row { display: flex; gap: 16px; margin-bottom: 10px; font-size: 12px; color: #606266; }
+        .style-radio-row label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+        .style-sub-panel { margin-top: 8px; }
+        .style-icon-preview { max-width: 48px; max-height: 48px; margin-top: 6px; display: none; border-radius: 4px; border: 1px solid #eee; }
+        .layer-style-footer {
+            display: flex; justify-content: flex-end; gap: 10px; padding: 12px 16px;
+            border-top: 1px solid #ebeef5; background: #fff;
+        }
+        .layer-style-footer button {
+            padding: 8px 18px; border-radius: 6px; font-size: 13px; cursor: pointer; border: 1px solid #dcdfe6;
+        }
+        .layer-style-footer .btn-cancel { background: #fff; color: #606266; }
+        .layer-style-footer .btn-cancel:hover { background: #f5f7fa; }
+        .layer-style-footer .btn-apply { background: #409eff; color: #fff; border-color: #409eff; }
+        .layer-style-footer .btn-apply:hover { background: #66b1ff; }
+        body.layer-panel-open #toolbar { left: 430px; }
         body.layer-panel-open #coord-input-panel,
-        body.layer-panel-open #pick-result-panel { left: 450px; }
+        body.layer-panel-open #pick-result-panel { left: 470px; }
         body:not(.layer-panel-open) #toolbar { left: 30px; }
         .panel-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; min-width: 360px; }
         #search-panel.collapsed .panel-content { display: none; }
@@ -131,7 +264,7 @@
         #pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
         #page-info { margin: 0 10px; }
         .hint { font-size: 12px; color: #999; margin-top: 10px; }
-        #popup { position: absolute; background: white; padding: 15px; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,0.15); max-width: 280px; z-index: 1000; display: none; }
+        #popup { position: absolute; background: white; padding: 15px; border-radius: 6px; box-shadow: 0 2px 12px rgba(0,0,0,0.15); max-width: 320px; max-height: 280px; overflow-y: auto; z-index: 1000; display: none; }
         #popup-close { position: absolute; top: 8px; right: 10px; width: 20px; height: 20px; line-height: 18px; text-align: center; border-radius: 50%; background: #f5f5f5; cursor: pointer; font-size: 14px; color: #999; }
         #popup-title { font-weight: bold; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #eee; font-size: 14px; color: #333; padding-right: 20px; }
         #popup-content { font-size: 13px; color: #666; line-height: 1.6; }
@@ -156,7 +289,7 @@
         #ranging-result.show { display: block; }
         #ranging-result button { margin-left: 15px; padding: 2px 8px; font-size: 12px; border: 1px solid #ddd; background: #fff; border-radius: 3px; cursor: pointer; }
         #layer-control { position: absolute; top: 10px; background: rgba(255,255,255,0.95); border-radius: 4px; padding: 8px 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); z-index: 100; transition: right 0.3s ease; }
-        body.panel-open #layer-control { right: 440px; }
+        body.panel-open #layer-control { right: 410px; }
         body:not(.panel-open) #layer-control { right: 10px; }
         #layer-control label { display: block; margin-bottom: 5px; cursor: pointer; font-size: 13px; white-space: nowrap; }
         #layer-control label:last-child { margin-bottom: 0; }
@@ -167,16 +300,67 @@
         }
         .ol-tooltip-measure { opacity: 1; }
         .ol-tooltip-static { background: #ffcc33; color: #000; }
+        .interp-field { margin-bottom: 10px; }
+        .interp-field:last-child { margin-bottom: 0; }
+        .interp-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 5px; font-weight: 500; }
+        .interp-field input, .interp-field select {
+            width: 100%; padding: 7px 10px; border: 1px solid #dcdfe6; border-radius: 6px;
+            font-size: 13px; box-sizing: border-box; background: #fff;
+            transition: border-color 0.2s, box-shadow 0.2s; outline: none;
+        }
+        .interp-field input:focus, .interp-field select:focus {
+            border-color: #409eff; box-shadow: 0 0 0 2px rgba(64,158,255,0.15);
+        }
+        .interp-row { display: flex; gap: 8px; }
+        .interp-row .interp-field { flex: 1; }
+        .interp-btn {
+            width: 100%; padding: 9px; border: none; border-radius: 6px;
+            background: #409eff; color: #fff; cursor: pointer; font-size: 13px; margin-top: 6px;
+            font-weight: 500; transition: background 0.2s;
+        }
+        .interp-btn:hover { background: #66b1ff; }
+        .interp-btn.secondary { background: #fff; color: #606266; border: 1px solid #dcdfe6; margin-top: 8px; }
+        .interp-btn.secondary:hover { background: #f5f7fa; border-color: #c0c4cc; color: #303133; }
+        .interp-legend { margin-top: 10px; font-size: 12px; padding: 8px; background: #fafbfc; border-radius: 6px; border: 1px solid #ebeef5; }
+        .interp-legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; color: #606266; }
+        .interp-legend-color { width: 28px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.08); flex-shrink: 0; }
+        .track-pick-row { display: flex; gap: 8px; margin-bottom: 10px; }
+        .track-pick-btn {
+            flex: 1; padding: 8px; border: 1px solid #e4e7ed; background: #f5f7fa;
+            border-radius: 6px; cursor: pointer; font-size: 12px; color: #606266;
+            transition: all 0.2s;
+        }
+        .track-pick-btn:hover { border-color: #b3d8ff; color: #409eff; }
+        .track-pick-btn.active { background: #409eff; color: #fff; border-color: #409eff; }
+        #track-route-info {
+            margin-top: 10px; font-size: 12px; color: #606266; max-height: 160px;
+            overflow-y: auto; border: 1px solid #ebeef5; border-radius: 6px;
+            padding: 10px; background: #fafbfc; line-height: 1.6;
+        }
+        .panel-hint { font-size: 11px; color: #909399; margin: 0 0 10px; line-height: 1.5; }
+        .url-hint { font-size: 11px; color: #c0c4cc; line-height: 1.5; margin-bottom: 6px; word-break: break-all; }
     </style>
 </head>
-<body class="panel-open">
+<body>
     <div id="map"></div>
 
     <div id="toggle-layer-panel" onclick="toggleLayerPanel()">›</div>
 
     <div id="layer-panel" class="collapsed">
         <div class="panel-content">
-            <h3 class="panel-title">图层管理</h3>
+            <div class="left-panel-header">
+                <h2>地图工具箱</h2>
+                <p>图层管理 · 空间分析 · 路径规划</p>
+            </div>
+            <div class="left-panel-tabs">
+                <button type="button" class="left-panel-tab active" data-ltab="layers" onclick="switchLeftPanelTab('layers')">图层管理</button>
+                <button type="button" class="left-panel-tab" data-ltab="spatial" onclick="switchLeftPanelTab('spatial')">空间分析</button>
+                <button type="button" class="left-panel-tab" data-ltab="track" onclick="switchLeftPanelTab('track')">车辆轨迹</button>
+            </div>
+
+            <div id="left-tab-layers" class="left-tab-panel active">
+            <div class="left-section">
+                <div class="left-section-title">添加图层</div>
             <div class="layer-add-tabs">
                 <button type="button" class="layer-add-tab active" data-tab="import" onclick="TdtLayerManager.switchAddTab('import')">导入</button>
                 <button type="button" class="layer-add-tab" data-tab="url" onclick="TdtLayerManager.switchAddTab('url')">URL</button>
@@ -220,10 +404,7 @@
                 </div>
                 <div class="layer-field">
                     <label>服务 URL</label>
-                    <span id="" style="font-size: 11px;color: #ccc;">
-                    	http://ip/youname/Layers/_alllayers/
-                    	http://ip/arcgis/rest/services/youname/MapServer/tile/{z}/{y}/{x}
-                    </span>
+                    <div class="url-hint">示例：http://ip/.../tile/{z}/{y}/{x}</div>
                     <input type="text" id="layer-url-base" placeholder="https://.../{z}/{x}/{y} 或 WMS/WMTS 地址">
                 </div>
                 <div class="layer-field url-opt url-opt-proj" style="display:block;">
@@ -272,10 +453,121 @@
                 </div>
                 <button type="button" class="layer-btn" onclick="submitLayerCustom()">确定添加</button>
             </div>
+            </div>
 
-            <div class="layer-list-wrap">
+            <div class="left-section layer-list-wrap">
                 <div class="layer-list-title">图层列表</div>
                 <div id="layer-list"></div>
+            </div>
+            </div>
+
+            <div id="left-tab-spatial" class="left-tab-panel">
+                <div class="left-section">
+                <div class="left-section-title">插值分析</div>
+                <div class="interp-field">
+                    <label>数据文件 (CSV / JSON / GeoJSON / SHP)</label>
+                    <input type="file" id="interp-file" accept=".csv,.json,.geojson,.zip,.shp">
+                </div>
+                <div class="interp-field">
+                    <label>插值字段名</label>
+                    <input type="text" id="interp-field-name" value="value" placeholder="如 aqi、value、pm25">
+                </div>
+                <div class="interp-field">
+                    <label>格网列数（正方形格网，行数自动计算）</label>
+                    <input type="number" id="interp-cols" value="60" min="10" max="300">
+                </div>
+                <div class="interp-field">
+                    <label>插值类型</label>
+                    <select id="interp-method" onchange="TdtSpatialAnalysis.toggleMethodParams(this.value)">
+                        <option value="idw">反距离权重 (IDW)</option>
+                        <option value="kriging">克里金 (Kriging)</option>
+                    </select>
+                </div>
+                <div id="interp-idw-params">
+                    <div class="interp-field">
+                        <label>IDW 幂次 (power)</label>
+                        <input type="number" id="interp-idw-power" value="2" min="1" max="6" step="0.5">
+                    </div>
+                </div>
+                <div id="interp-kriging-params" style="display:none;">
+                    <div class="interp-field">
+                        <label>变异函数模型</label>
+                        <select id="interp-kriging-model">
+                            <option value="exponential">exponential</option>
+                            <option value="gaussian">gaussian</option>
+                            <option value="spherical">spherical</option>
+                        </select>
+                    </div>
+                    <div class="interp-row">
+                        <div class="interp-field">
+                            <label>sigma2</label>
+                            <input type="number" id="interp-sigma2" value="0" step="0.1">
+                        </div>
+                        <div class="interp-field">
+                            <label>alpha</label>
+                            <input type="number" id="interp-alpha" value="100" step="1">
+                        </div>
+                    </div>
+                </div>
+                <div class="interp-field">
+                    <label>分段值（逗号分隔，留空自动生成）</label>
+                    <input type="text" id="interp-breaks" placeholder="如 0,50,100,150,200">
+                </div>
+                <div class="interp-field">
+                    <label>裁剪区域（行政区边界）</label>
+                    <select id="interp-province-select"></select>
+                    <select id="interp-city-select" style="margin-top:6px;"></select>
+                </div>
+                <div class="interp-field">
+                    <label>显示类型</label>
+                    <select id="interp-display">
+                        <option value="raster">栅格 (Canvas)</option>
+                        <option value="contour">等值线</option>
+                        <option value="contourf">等值面</option>
+                        <option value="vector">格网矢量</option>
+                    </select>
+                </div>
+                <button type="button" class="interp-btn" onclick="runInterpolation()">执行插值分析</button>
+                <button type="button" class="interp-btn secondary" onclick="TdtSpatialAnalysis.clearLayers()">清除结果</button>
+                <div class="interp-legend" id="interp-legend"></div>
+                </div>
+            </div>
+
+            <div id="left-tab-track" class="left-tab-panel">
+                <div class="left-section">
+                <div class="left-section-title">车辆路径规划</div>
+                <div class="panel-hint">天地图驾车规划 API，可输入坐标或在地图上选点</div>
+                <div class="track-pick-row">
+                    <button type="button" class="track-pick-btn" id="track-pick-orig" onclick="startTrackPick('orig')">地图选起点</button>
+                    <button type="button" class="track-pick-btn" id="track-pick-dest" onclick="startTrackPick('dest')">地图选终点</button>
+                </div>
+                <div class="interp-field">
+                    <label>起点经度 / 纬度</label>
+                    <div class="interp-row">
+                        <input type="text" id="track-orig-lng" placeholder="经度" value="116.35506">
+                        <input type="text" id="track-orig-lat" placeholder="纬度" value="39.92277">
+                    </div>
+                </div>
+                <div class="interp-field">
+                    <label>终点经度 / 纬度</label>
+                    <div class="interp-row">
+                        <input type="text" id="track-dest-lng" placeholder="经度" value="116.39751">
+                        <input type="text" id="track-dest-lat" placeholder="纬度" value="39.90854">
+                    </div>
+                </div>
+                <div class="interp-field">
+                    <label>路径策略 (style)</label>
+                    <select id="track-style">
+                        <option value="0">0 - 最快路线</option>
+                        <option value="1">1 - 最短路线</option>
+                        <option value="2">2 - 避开高速</option>
+                        <option value="3">3 - 步行</option>
+                    </select>
+                </div>
+                <button type="button" class="interp-btn" onclick="planVehicleRoute()">规划路径</button>
+                <button type="button" class="interp-btn secondary" onclick="TdtVehicleTrack.clearRoute()">清除路径</button>
+                <div id="track-route-info"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -323,9 +615,9 @@
         <label><input type="radio" name="map-type" value="ter" onchange="switchMapType(this.value)"> 地形地图</label>
     </div>
 
-    <div id="toggle-panel" onclick="togglePanel()">‹</div>
+    <div id="toggle-panel" onclick="togglePanel()">›</div>
 
-    <div id="search-panel">
+    <div id="search-panel" class="collapsed">
         <div class="panel-content">
             <h3 class="panel-title">名称搜索</h3>
             <div class="region-select">
@@ -356,6 +648,104 @@
         </div>
     </div>
 
+    <div id="layer-style-modal" class="layer-style-modal" onclick="if(event.target===this)TdtLayerManager.closeStyleSettings()">
+        <div class="layer-style-dialog">
+            <div class="layer-style-header">
+                <h3 id="layer-style-title">图层样式</h3>
+                <button type="button" class="layer-style-close" onclick="TdtLayerManager.closeStyleSettings()">×</button>
+            </div>
+            <div class="layer-style-body">
+                <div id="style-section-point" class="style-section" style="display:none;">
+                    <div class="style-section-title">点样式</div>
+                    <div class="style-radio-row">
+                        <label><input type="radio" name="style-point-mode" value="circle" checked onchange="TdtLayerManager.togglePointModeUI()"> 圆形</label>
+                        <label><input type="radio" name="style-point-mode" value="icon" onchange="TdtLayerManager.togglePointModeUI()"> 图标</label>
+                    </div>
+                    <div id="style-point-circle-panel" class="style-sub-panel">
+                        <div class="style-row">
+                            <div class="style-field"><label>填充色</label><input type="color" id="style-point-fill" value="#e6a23c"></div>
+                            <div class="style-field"><label>边框色</label><input type="color" id="style-point-stroke" value="#ffffff"></div>
+                        </div>
+                        <div class="style-row">
+                            <div class="style-field"><label>大小 (半径 px)</label><input type="number" id="style-point-radius" value="6" min="1" max="50"></div>
+                            <div class="style-field"><label>边框宽度</label><input type="number" id="style-point-stroke-width" value="2" min="0" max="10"></div>
+                        </div>
+                    </div>
+                    <div id="style-point-icon-panel" class="style-sub-panel" style="display:none;">
+                        <div class="style-field">
+                            <label>上传图标 (PNG/SVG/JPG)</label>
+                            <input type="file" id="style-point-icon-file" accept="image/*" onchange="TdtLayerManager.handleStyleIconFile(this)">
+                            <img id="style-point-icon-preview" class="style-icon-preview" alt="">
+                        </div>
+                        <div class="style-field"><label>图标缩放</label><input type="number" id="style-point-icon-scale" value="1" min="0.1" max="5" step="0.1"></div>
+                    </div>
+                </div>
+                <div id="style-section-line" class="style-section" style="display:none;">
+                    <div class="style-section-title">线样式</div>
+                    <div class="style-row">
+                        <div class="style-field"><label>线颜色</label><input type="color" id="style-line-color" value="#e6a23c"></div>
+                        <div class="style-field"><label>线宽 (px)</label><input type="number" id="style-line-width" value="2" min="1" max="20"></div>
+                    </div>
+                    <div class="style-field">
+                        <label>线样式</label>
+                        <select id="style-line-dash">
+                            <option value="">实线</option>
+                            <option value="8,8">虚线</option>
+                            <option value="2,6">点线</option>
+                            <option value="8,4,2,4">点划线</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="style-section-polygon" class="style-section" style="display:none;">
+                    <div class="style-section-title">面样式</div>
+                    <div class="style-row">
+                        <div class="style-field"><label>边框色</label><input type="color" id="style-polygon-stroke" value="#e6a23c"></div>
+                        <div class="style-field"><label>边框宽度</label><input type="number" id="style-polygon-stroke-width" value="2" min="0" max="20"></div>
+                    </div>
+                    <div class="style-field">
+                        <label>边框样式</label>
+                        <select id="style-polygon-dash">
+                            <option value="">实线</option>
+                            <option value="8,8">虚线</option>
+                            <option value="2,6">点线</option>
+                            <option value="8,4,2,4">点划线</option>
+                        </select>
+                    </div>
+                    <div class="style-row">
+                        <div class="style-field"><label>填充色</label><input type="color" id="style-polygon-fill" value="#e6a23c"></div>
+                        <div class="style-field"><label>填充透明度 (%)</label><input type="number" id="style-polygon-fill-opacity" value="25" min="0" max="100"></div>
+                    </div>
+                </div>
+                <div id="style-section-label" class="style-section">
+                    <div class="style-section-title">标注样式</div>
+                    <div class="style-field">
+                        <label><input type="checkbox" id="style-label-enabled"> 显示标注</label>
+                    </div>
+                    <div class="style-field">
+                        <label>标注字段</label>
+                        <select id="style-label-field"><option value="">请选择字段</option></select>
+                    </div>
+                    <div class="style-row">
+                        <div class="style-field"><label>字号 (px)</label><input type="number" id="style-label-size" value="12" min="8" max="32"></div>
+                        <div class="style-field"><label>文字颜色</label><input type="color" id="style-label-color" value="#303133"></div>
+                    </div>
+                    <div class="style-row">
+                        <div class="style-field"><label>描边颜色</label><input type="color" id="style-label-outline-color" value="#ffffff"></div>
+                        <div class="style-field"><label>描边宽度</label><input type="number" id="style-label-outline-width" value="3" min="0" max="10"></div>
+                    </div>
+                    <div class="style-row">
+                        <div class="style-field"><label>偏移 X</label><input type="number" id="style-label-offset-x" value="0" min="-100" max="100"></div>
+                        <div class="style-field"><label>偏移 Y</label><input type="number" id="style-label-offset-y" value="-14" min="-100" max="100"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="layer-style-footer">
+                <button type="button" class="btn-cancel" onclick="TdtLayerManager.closeStyleSettings()">取消</button>
+                <button type="button" class="btn-apply" onclick="TdtLayerManager.applyStyleSettings()">确定</button>
+            </div>
+        </div>
+    </div>
+
     <div id="popup">
         <div id="popup-close" onclick="closePopup()">×</div>
         <div id="popup-title"></div>
@@ -377,7 +767,7 @@
         let baseLayer = null;
         let labelLayer = null;
         let selectedFeature = null;
-        let isPanelCollapsed = false;
+        let isPanelCollapsed = true;
         let isLayerPanelCollapsed = true;
         let isPickMode = false;
         let isRangingMode = false;
@@ -511,6 +901,7 @@
             map.addOverlay(measureTooltip);
 
             map.on('singleclick', function(e) {
+                if (typeof TdtVehicleTrack !== 'undefined' && TdtVehicleTrack.handlePickClick(e)) return;
                 if (isPickMode) {
                     handlePickClick(e);
                     return;
@@ -525,6 +916,9 @@
                         return true;
                     }
                 });
+                if (!clicked && typeof TdtLayerManager !== 'undefined' && TdtLayerManager.handleMapClick(e)) {
+                    clicked = true;
+                }
                 if (!clicked) closePopup();
             });
 
@@ -567,7 +961,7 @@
 
         function getMapFitPadding() {
             const left = isLayerPanelCollapsed ? 50 : 400;
-            const right = isPanelCollapsed ? 50 : 420;
+            const right = isPanelCollapsed ? 50 : 410;
             return [50, right, 50, left];
         }
 
@@ -1090,17 +1484,74 @@
             markerLayer.changed();
         }
 
+        function escapeHtml(s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
         function showPopup(feature, coordinate) {
             const popupEl = document.getElementById('popup');
             const props = feature.getProperties();
 
-            document.getElementById('popup-title').textContent = props.name || props.company_name;
+            document.getElementById('popup-title').textContent = props.name || props.company_name || '查询结果';
             document.getElementById('popup-content').innerHTML =
-                '<p><span style="color:#999;margin-right:5px;">搜索名称:</span>' + props.company_name + '</p>' +
-                '<p><span style="color:#999;margin-right:5px;">名称:</span>' + (props.name || '-') + '</p>' +
-                '<p><span style="color:#999;margin-right:5px;">地址:</span>' + (props.address || '-') + '</p>' +
+                '<p><span style="color:#999;margin-right:5px;">搜索名称:</span>' + escapeHtml(props.company_name || '-') + '</p>' +
+                '<p><span style="color:#999;margin-right:5px;">名称:</span>' + escapeHtml(props.name || '-') + '</p>' +
+                '<p><span style="color:#999;margin-right:5px;">地址:</span>' + escapeHtml(props.address || '-') + '</p>' +
                 '<p><span style="color:#999;margin-right:5px;">坐标:</span>' + props.lng + ', ' + props.lat + '</p>';
 
+            positionPopup(popupEl, coordinate);
+        }
+
+        function showFeatureAttributePopup(feature, coordinate, layerEntry) {
+            const popupEl = document.getElementById('popup');
+            const props = feature.getProperties();
+            const skipKeys = { geometry: 1, selected: 1 };
+            const keys = Object.keys(props).filter(function (k) { return !skipKeys[k]; });
+
+            let title = layerEntry && layerEntry.name ? layerEntry.name : '要素属性';
+            keys.some(function (k) {
+                const lower = k.toLowerCase();
+                if (lower === 'name' || lower === '名称' || lower === 'title') {
+                    title = props[k];
+                    return true;
+                }
+                return false;
+            });
+            document.getElementById('popup-title').textContent = title;
+
+            let html = '';
+            if (!keys.length) {
+                html = '<p style="color:#999;">无属性字段</p>';
+            } else {
+                keys.forEach(function (k) {
+                    const v = props[k];
+                    if (v == null || v === '') return;
+                    html += '<p><span style="color:#999;margin-right:5px;">' + escapeHtml(k) + ':</span>' + escapeHtml(String(v)) + '</p>';
+                });
+            }
+
+            const geom = feature.getGeometry();
+            if (geom) {
+                const type = geom.getType();
+                if (type === 'Point') {
+                    const c = geom.getCoordinates();
+                    html += '<p><span style="color:#999;margin-right:5px;">坐标:</span>' + c[0].toFixed(6) + ', ' + c[1].toFixed(6) + '</p>';
+                } else if (type === 'LineString' || type === 'MultiLineString' ||
+                    type === 'Polygon' || type === 'MultiPolygon') {
+                    const extent = geom.getExtent();
+                    if (extent && extent.every(isFinite)) {
+                        const cx = ((extent[0] + extent[2]) / 2).toFixed(6);
+                        const cy = ((extent[1] + extent[3]) / 2).toFixed(6);
+                        html += '<p><span style="color:#999;margin-right:5px;">范围中心:</span>' + cx + ', ' + cy + '</p>';
+                    }
+                }
+            }
+
+            document.getElementById('popup-content').innerHTML = html;
+            positionPopup(popupEl, coordinate);
+        }
+
+        function positionPopup(popupEl, coordinate) {
             const pixel = map.getPixelFromCoordinate(coordinate);
             popupEl.style.left = (pixel[0] + 15) + 'px';
             popupEl.style.top = (pixel[1] - 10) + 'px';
@@ -1138,12 +1589,71 @@
             document.body.removeChild(link);
         }
 
+        function switchLeftPanelTab(tab) {
+            document.querySelectorAll('.left-panel-tab').forEach(function (btn) {
+                btn.classList.toggle('active', btn.dataset.ltab === tab);
+            });
+            document.querySelectorAll('.left-tab-panel').forEach(function (panel) {
+                panel.classList.toggle('active', panel.id === 'left-tab-' + tab);
+            });
+            setTimeout(function () { if (map) map.updateSize(); }, 100);
+        }
+
+        async function runInterpolation() {
+            const fileInput = document.getElementById('interp-file');
+            if (!fileInput.files || !fileInput.files[0]) {
+                alert('请先上传插值数据文件');
+                return;
+            }
+            try {
+                await TdtSpatialAnalysis.runAnalysis({
+                    file: fileInput.files[0],
+                    fieldName: document.getElementById('interp-field-name').value.trim() || 'value',
+                    cols: document.getElementById('interp-cols').value,
+                    method: document.getElementById('interp-method').value,
+                    idwPower: document.getElementById('interp-idw-power').value,
+                    krigingModel: document.getElementById('interp-kriging-model').value,
+                    sigma2: document.getElementById('interp-sigma2').value,
+                    alpha: document.getElementById('interp-alpha').value,
+                    breaks: document.getElementById('interp-breaks').value,
+                    display: document.getElementById('interp-display').value,
+                    provinceSelectId: 'interp-province-select',
+                    citySelectId: 'interp-city-select',
+                    useClip: true
+                });
+                alert('插值分析完成');
+            } catch (e) {
+                alert('插值失败: ' + e.message);
+            }
+        }
+
+        async function planVehicleRoute() {
+            try {
+                await TdtVehicleTrack.planRoute();
+            } catch (e) {
+                alert('路径规划失败: ' + e.message);
+            }
+        }
+
+        function startTrackPick(mode) {
+            if (isPickMode) togglePickCoord();
+            if (isRangingMode) stopRanging();
+            TdtVehicleTrack.setPickMode(mode);
+        }
+
         map = initMap();
-        TdtLayerManager.init(map, 'layer-list');
+        TdtLayerManager.init(map, 'layer-list', {
+            onFeatureClick: function (feature, coordinate, entry) {
+                showFeatureAttributePopup(feature, coordinate, entry);
+            }
+        });
         document.getElementById('layer-custom-code').value = TdtLayerManager.getDefaultCustomCode();
         TdtLayerManager.updateUrlFormVisibility(document.getElementById('layer-url-type').value);
         TdtLayerManager.switchImportType('csv');
+        TdtSpatialAnalysis.init(map, fetchBoundaryGeoJson);
+        TdtVehicleTrack.init(map, TD_KEY);
         RegionData.initSelects('province-select', 'city-select', RegionData.DEFAULT_PROVINCE);
+        RegionData.initSelects('interp-province-select', 'interp-city-select', RegionData.DEFAULT_PROVINCE);
         initRegionBoundaryEvents();
         updateRegionBoundary(false);
     </script>

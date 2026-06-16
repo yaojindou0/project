@@ -7,6 +7,9 @@ const TdtLayerManager = (function () {
 
     let map = null;
     let listEl = null;
+    let onFeatureClick = null;
+    let styleEditId = null;
+    let pendingIconDataUrl = null;
     const managedLayers = [];
     let uid = 1;
     const Z_BASE = 30;
@@ -21,16 +24,198 @@ const TdtLayerManager = (function () {
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 
-    function defaultVectorStyle() {
-        return new ol.style.Style({
-            stroke: new ol.style.Stroke({ color: '#e6a23c', width: 2 }),
-            fill: new ol.style.Fill({ color: 'rgba(230, 162, 60, 0.25)' }),
-            image: new ol.style.Circle({
-                radius: 6,
-                fill: new ol.style.Fill({ color: '#e6a23c' }),
-                stroke: new ol.style.Stroke({ color: '#fff', width: 2 })
+    function defaultStyleConfig() {
+        return {
+            point: {
+                renderType: 'circle',
+                circleFill: '#e6a23c',
+                circleStroke: '#ffffff',
+                circleStrokeWidth: 2,
+                circleRadius: 6,
+                iconUrl: '',
+                iconScale: 1
+            },
+            line: { color: '#e6a23c', width: 2, lineDash: '' },
+            polygon: {
+                strokeColor: '#e6a23c',
+                strokeWidth: 2,
+                lineDash: '',
+                fillColor: '#e6a23c',
+                fillOpacity: 0.25
+            },
+            label: {
+                enabled: false,
+                field: '',
+                fontSize: 12,
+                fontColor: '#303133',
+                outlineColor: '#ffffff',
+                outlineWidth: 3,
+                offsetX: 0,
+                offsetY: -14
+            }
+        };
+    }
+
+    function cloneStyleConfig(cfg) {
+        return JSON.parse(JSON.stringify(cfg || defaultStyleConfig()));
+    }
+
+    function hexToRgba(hex, alpha) {
+        const h = String(hex || '#000000').replace('#', '');
+        if (h.length < 6) return 'rgba(0,0,0,' + alpha + ')';
+        const r = parseInt(h.substr(0, 2), 16);
+        const g = parseInt(h.substr(2, 2), 16);
+        const b = parseInt(h.substr(4, 2), 16);
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+    }
+
+    function parseLineDash(str) {
+        if (!str || !String(str).trim()) return null;
+        const parts = String(str).split(',').map(function (n) { return parseFloat(n.trim()); });
+        return parts.some(isNaN) ? null : parts;
+    }
+
+    function classifyGeom(geom, types) {
+        if (!geom) return;
+        const t = geom.getType();
+        if (t === 'Point' || t === 'MultiPoint') types.point = true;
+        else if (t === 'LineString' || t === 'MultiLineString') types.line = true;
+        else if (t === 'Polygon' || t === 'MultiPolygon') types.polygon = true;
+        else if (t === 'GeometryCollection') {
+            geom.getGeometries().forEach(function (g) { classifyGeom(g, types); });
+        }
+    }
+
+    function detectGeomTypes(layer) {
+        const source = layer.getSource && layer.getSource();
+        const types = { point: false, line: false, polygon: false };
+        if (!source || !source.getFeatures) return ['point'];
+        source.getFeatures().forEach(function (f) { classifyGeom(f.getGeometry(), types); });
+        const list = Object.keys(types).filter(function (k) { return types[k]; });
+        return list.length ? list : ['point'];
+    }
+
+    function collectPropertyKeys(layer) {
+        const source = layer.getSource && layer.getSource();
+        const keys = {};
+        if (!source || !source.getFeatures) return [];
+        source.getFeatures().forEach(function (f) {
+            Object.keys(f.getProperties()).forEach(function (k) {
+                if (k !== 'geometry') keys[k] = true;
+            });
+        });
+        return Object.keys(keys).sort();
+    }
+
+    function buildPointImage(cfg) {
+        if (cfg.renderType === 'icon' && cfg.iconUrl) {
+            return new ol.style.Icon({
+                src: cfg.iconUrl,
+                scale: cfg.iconScale != null ? cfg.iconScale : 1,
+                anchor: [0.5, 0.5]
+            });
+        }
+        return new ol.style.Circle({
+            radius: cfg.circleRadius != null ? cfg.circleRadius : 6,
+            fill: new ol.style.Fill({ color: cfg.circleFill || '#e6a23c' }),
+            stroke: new ol.style.Stroke({
+                color: cfg.circleStroke || '#ffffff',
+                width: cfg.circleStrokeWidth != null ? cfg.circleStrokeWidth : 2
             })
         });
+    }
+
+    function buildStroke(cfg) {
+        return new ol.style.Stroke({
+            color: cfg.color || cfg.strokeColor || '#e6a23c',
+            width: cfg.width != null ? cfg.width : (cfg.strokeWidth != null ? cfg.strokeWidth : 2),
+            lineDash: parseLineDash(cfg.lineDash)
+        });
+    }
+
+    function buildLabelStyle(labelCfg, text, geom) {
+        const gType = geom.getType();
+        let placement = 'point';
+        let labelGeometry = null;
+        if (gType.indexOf('Line') >= 0) placement = 'line';
+        else if (gType.indexOf('Polygon') >= 0) {
+            labelGeometry = function (feature) {
+                return new ol.geom.Point(ol.extent.getCenter(feature.getGeometry().getExtent()));
+            };
+        }
+        const styleOpts = {
+            text: new ol.style.Text({
+                text: text,
+                font: (labelCfg.fontSize || 12) + 'px sans-serif',
+                fill: new ol.style.Fill({ color: labelCfg.fontColor || '#303133' }),
+                stroke: new ol.style.Stroke({
+                    color: labelCfg.outlineColor || '#ffffff',
+                    width: labelCfg.outlineWidth != null ? labelCfg.outlineWidth : 3
+                }),
+                offsetX: labelCfg.offsetX || 0,
+                offsetY: labelCfg.offsetY != null ? labelCfg.offsetY : -14,
+                placement: placement,
+                overflow: true
+            })
+        };
+        if (labelGeometry) styleOpts.geometry = labelGeometry;
+        return new ol.style.Style(styleOpts);
+    }
+
+    function createStyleFunction(entry) {
+        return function (feature) {
+            const geom = feature.getGeometry();
+            if (!geom) return null;
+            const gType = geom.getType();
+            const cfg = entry.styleConfig || defaultStyleConfig();
+            const styles = [];
+
+            if (gType === 'Point' || gType === 'MultiPoint') {
+                styles.push(new ol.style.Style({ image: buildPointImage(cfg.point) }));
+            } else if (gType === 'LineString' || gType === 'MultiLineString') {
+                styles.push(new ol.style.Style({ stroke: buildStroke(cfg.line) }));
+            } else if (gType === 'Polygon' || gType === 'MultiPolygon') {
+                styles.push(new ol.style.Style({
+                    stroke: buildStroke({
+                        color: cfg.polygon.strokeColor,
+                        width: cfg.polygon.strokeWidth,
+                        lineDash: cfg.polygon.lineDash
+                    }),
+                    fill: new ol.style.Fill({
+                        color: hexToRgba(cfg.polygon.fillColor, cfg.polygon.fillOpacity != null ? cfg.polygon.fillOpacity : 0.25)
+                    })
+                }));
+            } else {
+                styles.push(new ol.style.Style({
+                    stroke: buildStroke(cfg.line),
+                    fill: new ol.style.Fill({
+                        color: hexToRgba(cfg.polygon.fillColor, cfg.polygon.fillOpacity != null ? cfg.polygon.fillOpacity : 0.25)
+                    }),
+                    image: buildPointImage(cfg.point)
+                }));
+            }
+
+            if (cfg.label.enabled && cfg.label.field) {
+                const val = feature.get(cfg.label.field);
+                if (val != null && val !== '') {
+                    styles.push(buildLabelStyle(cfg.label, String(val), geom));
+                }
+            }
+            return styles.length === 1 ? styles[0] : styles;
+        };
+    }
+
+    function initLayerStyle(entry) {
+        if (!isVectorLayer(entry.layer)) return;
+        entry.geomTypes = detectGeomTypes(entry.layer);
+        entry.propertyKeys = collectPropertyKeys(entry.layer);
+        entry.styleConfig = entry.styleConfig || defaultStyleConfig();
+        applyLayerStyle(entry);
+    }
+
+    function applyLayerStyle(entry) {
+        if (!isVectorLayer(entry.layer)) return;
+        entry.layer.setStyle(createStyleFunction(entry));
     }
 
     function getProjection(code) {
@@ -39,10 +224,21 @@ const TdtLayerManager = (function () {
         return ol.proj.get(code) || ol.proj.get('EPSG:4326');
     }
 
-    function init(mapInstance, listContainerId) {
+    function init(mapInstance, listContainerId, options) {
         map = mapInstance;
         listEl = document.getElementById(listContainerId);
+        onFeatureClick = options && options.onFeatureClick;
         renderList();
+    }
+
+    function isVectorLayer(layer) {
+        return layer instanceof ol.layer.Vector;
+    }
+
+    function applyZIndices() {
+        managedLayers.forEach(function (e, i) {
+            e.layer.setZIndex(Z_BASE + i);
+        });
     }
 
     function register(layer, meta) {
@@ -52,12 +248,16 @@ const TdtLayerManager = (function () {
             name: meta.name || ('图层' + uid),
             type: meta.type || 'unknown',
             layer: layer,
-            visible: true
+            visible: true,
+            opacity: meta.opacity != null ? meta.opacity : 1,
+            interactive: meta.interactive === true
         };
         layer.setVisible(true);
-        layer.setZIndex(Z_BASE + managedLayers.length);
+        layer.setOpacity(entry.opacity);
         map.addLayer(layer);
         managedLayers.push(entry);
+        applyZIndices();
+        if (isVectorLayer(layer)) initLayerStyle(entry);
         renderList();
         return entry;
     }
@@ -79,23 +279,98 @@ const TdtLayerManager = (function () {
         if (idx < 0) return;
         map.removeLayer(managedLayers[idx].layer);
         managedLayers.splice(idx, 1);
+        applyZIndices();
         renderList();
     }
 
-    function renderList() {
-        if (!listEl) return;
-        if (!managedLayers.length) {
-            listEl.innerHTML = '<div class="layer-empty">暂无自定义图层</div>';
-            return;
+    function setOpacity(id, value, inputEl) {
+        const entry = findEntry(id);
+        if (!entry) return;
+        const opacity = Math.max(0, Math.min(100, parseInt(value, 10) || 0)) / 100;
+        entry.opacity = opacity;
+        entry.layer.setOpacity(opacity);
+        if (inputEl) {
+            const row = inputEl.closest('.layer-opacity-row');
+            if (row) {
+                const valEl = row.querySelector('.layer-opacity-value');
+                if (valEl) valEl.textContent = Math.round(opacity * 100) + '%';
+            }
         }
-        listEl.innerHTML = managedLayers.map(function (e) {
+    }
+
+    function moveLayer(id, direction) {
+        const idx = managedLayers.findIndex(function (e) { return e.id === id; });
+        if (idx < 0) return;
+        const newIdx = direction === 'up' ? idx + 1 : idx - 1;
+        if (newIdx < 0 || newIdx >= managedLayers.length) return;
+        const tmp = managedLayers[idx];
+        managedLayers[idx] = managedLayers[newIdx];
+        managedLayers[newIdx] = tmp;
+        applyZIndices();
+        renderList();
+    }
+
+    function handleMapClick(evt) {
+        if (!map) return false;
+        let handled = false;
+        map.forEachFeatureAtPixel(evt.pixel, function (feature, layer) {
+            const entry = managedLayers.find(function (e) { return e.layer === layer; });
+            if (!entry || !entry.visible || !entry.interactive) return;
+            if (typeof onFeatureClick === 'function') {
+                onFeatureClick(feature, evt.coordinate, entry);
+            }
+            handled = true;
+            return true;
+        }, {
+            layerFilter: function (layer) {
+                return managedLayers.some(function (e) {
+                    return e.layer === layer && e.visible && e.interactive;
+                });
+            }
+        });
+        return handled;
+    }
+
+    function renderList() {
+        const html = buildListHtml();
+        if (listEl) listEl.innerHTML = html;
+    }
+
+    function buildListHtml() {
+        if (!managedLayers.length) {
+            return '<div class="layer-empty">暂无自定义图层</div>';
+        }
+        const items = managedLayers.map(function (e, idx) {
+            return { entry: e, idx: idx };
+        }).reverse();
+
+        return items.map(function (item) {
+            const e = item.entry;
+            const idx = item.idx;
+            const opacityPct = Math.round((e.opacity != null ? e.opacity : 1) * 100);
+            const upDisabled = idx >= managedLayers.length - 1 ? ' disabled' : '';
+            const downDisabled = idx <= 0 ? ' disabled' : '';
+            const canStyle = isVectorLayer(e.layer);
             return '<div class="layer-item">' +
+                '<div class="layer-item-head">' +
                 '<label class="layer-item-main">' +
                 '<input type="checkbox" ' + (e.visible ? 'checked' : '') + ' onchange="TdtLayerManager.toggleVisible(' + e.id + ')">' +
                 '<span class="layer-name" title="' + escapeHtml(e.name) + '">' + escapeHtml(e.name) + '</span>' +
                 '<span class="layer-type">' + escapeHtml(e.type) + '</span>' +
                 '</label>' +
+                '<div class="layer-order-btns">' +
+                '<button type="button" class="layer-settings-btn"' + (canStyle ? '' : ' disabled') +
+                ' onclick="TdtLayerManager.openStyleSettings(' + e.id + ')" title="样式设置">⚙</button>' +
+                '<button type="button" class="layer-order-btn"' + upDisabled + ' onclick="TdtLayerManager.moveLayer(' + e.id + ',\'up\')" title="上移一层">▲</button>' +
+                '<button type="button" class="layer-order-btn"' + downDisabled + ' onclick="TdtLayerManager.moveLayer(' + e.id + ',\'down\')" title="下移一层">▼</button>' +
                 '<button type="button" class="layer-del" onclick="TdtLayerManager.removeLayer(' + e.id + ')" title="移除">×</button>' +
+                '</div>' +
+                '</div>' +
+                '<div class="layer-opacity-row">' +
+                '<span class="layer-opacity-label">透明度</span>' +
+                '<input type="range" class="layer-opacity-slider" min="0" max="100" value="' + opacityPct + '" oninput="TdtLayerManager.setOpacity(' + e.id + ', this.value, this)">' +
+                '<span class="layer-opacity-value">' + opacityPct + '%</span>' +
+                '</div>' +
                 '</div>';
         }).join('');
     }
@@ -108,11 +383,8 @@ const TdtLayerManager = (function () {
         });
         if (!features.length) throw new Error('未解析到有效要素');
         const source = new ol.source.Vector({ features: features });
-        const layer = new ol.layer.Vector({
-            source: source,
-            style: defaultVectorStyle()
-        });
-        return register(layer, { name: name, type: '矢量数据' });
+        const layer = new ol.layer.Vector({ source: source });
+        return register(layer, { name: name, type: '矢量数据', interactive: true });
     }
 
     async function importData(type, options) {
@@ -124,7 +396,9 @@ const TdtLayerManager = (function () {
             fc = CoordFileConverter.parseWKT(options.text || '');
         } else if (type === 'csv') {
             if (typeof CoordFileConverter === 'undefined') throw new Error('CoordFileConverter 未加载');
-            fc = CoordFileConverter.parseCSVToFeatureCollection(options.text || '');
+            if (!options.file && !options.text) throw new Error('请选择 CSV 文件或粘贴内容');
+            const csvText = options.file ? await options.file.text() : (options.text || '');
+            fc = CoordFileConverter.parseCSVToFeatureCollection(csvText);
         } else if (type === 'shp') {
             if (typeof CoordFileConverter === 'undefined') throw new Error('CoordFileConverter 未加载');
             if (!options.file) throw new Error('请选择 Shapefile 文件');
@@ -314,7 +588,11 @@ const TdtLayerManager = (function () {
         if (!result || typeof result.setMap !== 'function') {
             throw new Error('代码需 return 一个 OpenLayers 图层对象 (ol.layer.*)');
         }
-        return register(result, { name: name || ('自定义图层' + uid), type: '自定义' });
+        return register(result, {
+            name: name || ('自定义图层' + uid),
+            type: '自定义',
+            interactive: isVectorLayer(result)
+        });
     }
 
     function getDefaultCustomCode() {
@@ -426,11 +704,191 @@ const TdtLayerManager = (function () {
         );
     }
 
+    function setVal(id, value) {
+        const el = document.getElementById(id);
+        if (el) el.value = value;
+    }
+
+    function setChecked(id, checked) {
+        const el = document.getElementById(id);
+        if (el) el.checked = !!checked;
+    }
+
+    function getVal(id) {
+        const el = document.getElementById(id);
+        return el ? el.value : '';
+    }
+
+    function getChecked(id) {
+        const el = document.getElementById(id);
+        return el ? el.checked : false;
+    }
+
+    function togglePointModeUI() {
+        const mode = document.querySelector('input[name="style-point-mode"]:checked');
+        const isIcon = mode && mode.value === 'icon';
+        const circlePanel = document.getElementById('style-point-circle-panel');
+        const iconPanel = document.getElementById('style-point-icon-panel');
+        if (circlePanel) circlePanel.style.display = isIcon ? 'none' : 'block';
+        if (iconPanel) iconPanel.style.display = isIcon ? 'block' : 'none';
+    }
+
+    function populateStyleModal(entry) {
+        const cfg = entry.styleConfig || defaultStyleConfig();
+        const titleEl = document.getElementById('layer-style-title');
+        if (titleEl) titleEl.textContent = '样式设置 - ' + entry.name;
+
+        const types = entry.geomTypes || ['point'];
+        document.getElementById('style-section-point').style.display = types.indexOf('point') >= 0 ? 'block' : 'none';
+        document.getElementById('style-section-line').style.display = types.indexOf('line') >= 0 ? 'block' : 'none';
+        document.getElementById('style-section-polygon').style.display = types.indexOf('polygon') >= 0 ? 'block' : 'none';
+
+        const mode = cfg.point.renderType || 'circle';
+        document.querySelectorAll('input[name="style-point-mode"]').forEach(function (r) {
+            r.checked = r.value === mode;
+        });
+        setVal('style-point-fill', cfg.point.circleFill || '#e6a23c');
+        setVal('style-point-stroke', cfg.point.circleStroke || '#ffffff');
+        setVal('style-point-radius', cfg.point.circleRadius != null ? cfg.point.circleRadius : 6);
+        setVal('style-point-stroke-width', cfg.point.circleStrokeWidth != null ? cfg.point.circleStrokeWidth : 2);
+        setVal('style-point-icon-scale', cfg.point.iconScale != null ? cfg.point.iconScale : 1);
+
+        const preview = document.getElementById('style-point-icon-preview');
+        if (preview) {
+            if (cfg.point.iconUrl) {
+                preview.src = cfg.point.iconUrl;
+                preview.style.display = 'block';
+            } else {
+                preview.src = '';
+                preview.style.display = 'none';
+            }
+        }
+        const iconFile = document.getElementById('style-point-icon-file');
+        if (iconFile) iconFile.value = '';
+        pendingIconDataUrl = null;
+        togglePointModeUI();
+
+        setVal('style-line-color', cfg.line.color || '#e6a23c');
+        setVal('style-line-width', cfg.line.width != null ? cfg.line.width : 2);
+        setVal('style-line-dash', cfg.line.lineDash || '');
+
+        setVal('style-polygon-stroke', cfg.polygon.strokeColor || '#e6a23c');
+        setVal('style-polygon-stroke-width', cfg.polygon.strokeWidth != null ? cfg.polygon.strokeWidth : 2);
+        setVal('style-polygon-dash', cfg.polygon.lineDash || '');
+        setVal('style-polygon-fill', cfg.polygon.fillColor || '#e6a23c');
+        setVal('style-polygon-fill-opacity', Math.round((cfg.polygon.fillOpacity != null ? cfg.polygon.fillOpacity : 0.25) * 100));
+
+        setChecked('style-label-enabled', cfg.label.enabled);
+        setVal('style-label-size', cfg.label.fontSize != null ? cfg.label.fontSize : 12);
+        setVal('style-label-color', cfg.label.fontColor || '#303133');
+        setVal('style-label-outline-color', cfg.label.outlineColor || '#ffffff');
+        setVal('style-label-outline-width', cfg.label.outlineWidth != null ? cfg.label.outlineWidth : 3);
+        setVal('style-label-offset-x', cfg.label.offsetX || 0);
+        setVal('style-label-offset-y', cfg.label.offsetY != null ? cfg.label.offsetY : -14);
+
+        const fieldSelect = document.getElementById('style-label-field');
+        if (fieldSelect) {
+            const keys = entry.propertyKeys || [];
+            fieldSelect.innerHTML = '<option value="">请选择字段</option>' +
+                keys.map(function (k) {
+                    return '<option value="' + escapeHtml(k) + '">' + escapeHtml(k) + '</option>';
+                }).join('');
+            fieldSelect.value = cfg.label.field || '';
+        }
+    }
+
+    function openStyleSettings(id) {
+        const entry = findEntry(id);
+        if (!entry || !isVectorLayer(entry.layer)) return;
+        styleEditId = id;
+        entry.propertyKeys = collectPropertyKeys(entry.layer);
+        populateStyleModal(entry);
+        const modal = document.getElementById('layer-style-modal');
+        if (modal) modal.classList.add('show');
+    }
+
+    function closeStyleSettings() {
+        styleEditId = null;
+        pendingIconDataUrl = null;
+        const modal = document.getElementById('layer-style-modal');
+        if (modal) modal.classList.remove('show');
+    }
+
+    function handleStyleIconFile(input) {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            pendingIconDataUrl = e.target.result;
+            const preview = document.getElementById('style-point-icon-preview');
+            if (preview) {
+                preview.src = pendingIconDataUrl;
+                preview.style.display = 'block';
+            }
+            document.querySelectorAll('input[name="style-point-mode"]').forEach(function (r) {
+                r.checked = r.value === 'icon';
+            });
+            togglePointModeUI();
+        };
+        reader.readAsDataURL(file);
+    }
+
+    function readStyleFromForm(entry) {
+        const cfg = cloneStyleConfig(entry.styleConfig);
+        const modeEl = document.querySelector('input[name="style-point-mode"]:checked');
+        cfg.point.renderType = modeEl ? modeEl.value : 'circle';
+        cfg.point.circleFill = getVal('style-point-fill') || '#e6a23c';
+        cfg.point.circleStroke = getVal('style-point-stroke') || '#ffffff';
+        cfg.point.circleRadius = parseFloat(getVal('style-point-radius')) || 6;
+        cfg.point.circleStrokeWidth = parseFloat(getVal('style-point-stroke-width'));
+        if (isNaN(cfg.point.circleStrokeWidth)) cfg.point.circleStrokeWidth = 2;
+        cfg.point.iconScale = parseFloat(getVal('style-point-icon-scale')) || 1;
+        if (pendingIconDataUrl) cfg.point.iconUrl = pendingIconDataUrl;
+        else if (cfg.point.renderType === 'icon' && entry.styleConfig && entry.styleConfig.point.iconUrl) {
+            cfg.point.iconUrl = entry.styleConfig.point.iconUrl;
+        }
+
+        cfg.line.color = getVal('style-line-color') || '#e6a23c';
+        cfg.line.width = parseFloat(getVal('style-line-width')) || 2;
+        cfg.line.lineDash = getVal('style-line-dash');
+
+        cfg.polygon.strokeColor = getVal('style-polygon-stroke') || '#e6a23c';
+        cfg.polygon.strokeWidth = parseFloat(getVal('style-polygon-stroke-width'));
+        if (isNaN(cfg.polygon.strokeWidth)) cfg.polygon.strokeWidth = 2;
+        cfg.polygon.lineDash = getVal('style-polygon-dash');
+        cfg.polygon.fillColor = getVal('style-polygon-fill') || '#e6a23c';
+        cfg.polygon.fillOpacity = Math.max(0, Math.min(100, parseFloat(getVal('style-polygon-fill-opacity')) || 25)) / 100;
+
+        cfg.label.enabled = getChecked('style-label-enabled');
+        cfg.label.field = getVal('style-label-field');
+        cfg.label.fontSize = parseFloat(getVal('style-label-size')) || 12;
+        cfg.label.fontColor = getVal('style-label-color') || '#303133';
+        cfg.label.outlineColor = getVal('style-label-outline-color') || '#ffffff';
+        cfg.label.outlineWidth = parseFloat(getVal('style-label-outline-width'));
+        if (isNaN(cfg.label.outlineWidth)) cfg.label.outlineWidth = 3;
+        cfg.label.offsetX = parseFloat(getVal('style-label-offset-x')) || 0;
+        cfg.label.offsetY = parseFloat(getVal('style-label-offset-y'));
+        if (isNaN(cfg.label.offsetY)) cfg.label.offsetY = -14;
+
+        return cfg;
+    }
+
+    function applyStyleSettings() {
+        const entry = styleEditId != null ? findEntry(styleEditId) : null;
+        if (!entry) return;
+        entry.styleConfig = readStyleFromForm(entry);
+        applyLayerStyle(entry);
+        closeStyleSettings();
+    }
+
     return {
         init: init,
         register: register,
         toggleVisible: toggleVisible,
         removeLayer: removeLayer,
+        setOpacity: setOpacity,
+        moveLayer: moveLayer,
+        handleMapClick: handleMapClick,
         renderList: renderList,
         importData: importData,
         addUrlLayer: addUrlLayer,
@@ -442,6 +900,11 @@ const TdtLayerManager = (function () {
         switchImportType: switchImportType,
         handleImportSubmit: handleImportSubmit,
         handleUrlSubmit: handleUrlSubmit,
-        handleCustomSubmit: handleCustomSubmit
+        handleCustomSubmit: handleCustomSubmit,
+        openStyleSettings: openStyleSettings,
+        closeStyleSettings: closeStyleSettings,
+        applyStyleSettings: applyStyleSettings,
+        togglePointModeUI: togglePointModeUI,
+        handleStyleIconFile: handleStyleIconFile
     };
 })();
