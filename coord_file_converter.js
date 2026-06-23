@@ -25,6 +25,86 @@ const CoordFileConverter = (function () {
         return [roundCoord(out[0], precision), roundCoord(out[1], precision)];
     }
 
+    const LNG_KEYS = ['lng', 'lon', 'longitude', 'x', '经度', 'LNG', 'LON', 'Longitude', 'LONGITUDE'];
+    const LAT_KEYS = ['lat', 'latitude', 'y', '纬度', 'LAT', 'Latitude', 'LATITUDE'];
+
+    function getObjField(obj, keys) {
+        if (!obj || typeof obj !== 'object') return null;
+        for (let i = 0; i < keys.length; i++) {
+            const v = obj[keys[i]];
+            if (v !== undefined && v !== null && v !== '') return v;
+        }
+        const lowerMap = {};
+        Object.keys(obj).forEach(function (k) { lowerMap[k.toLowerCase()] = k; });
+        for (let j = 0; j < keys.length; j++) {
+            const lk = keys[j].toLowerCase();
+            if (lowerMap[lk] != null) {
+                const v = obj[lowerMap[lk]];
+                if (v !== undefined && v !== null && v !== '') return v;
+            }
+        }
+        return null;
+    }
+
+    function extractLngLat(item) {
+        if (!item || typeof item !== 'object') return null;
+
+        let lng = getObjField(item, LNG_KEYS);
+        let lat = getObjField(item, LAT_KEYS);
+        if (lng != null && lat != null) {
+            return [Number(lng), Number(lat)];
+        }
+
+        const nested = item.location || item.coord || item.coordinate || item.point ||
+            (item.geometry && item.geometry.type === 'Point' ? item.geometry : null) ||
+            item.position;
+        if (nested) {
+            if (Array.isArray(nested) && nested.length >= 2) {
+                return [Number(nested[0]), Number(nested[1])];
+            }
+            if (nested.coordinates && nested.coordinates.length >= 2) {
+                return [Number(nested.coordinates[0]), Number(nested.coordinates[1])];
+            }
+            lng = getObjField(nested, LNG_KEYS);
+            lat = getObjField(nested, LAT_KEYS);
+            if (lng != null && lat != null) {
+                return [Number(lng), Number(lat)];
+            }
+        }
+        return null;
+    }
+
+    function unwrapRecordList(data) {
+        if (Array.isArray(data)) return data;
+        if (!data || typeof data !== 'object') return null;
+
+        const wrapKeys = ['data', 'records', 'list', 'items', 'rows', 'result', 'stations', 'points'];
+        for (let i = 0; i < wrapKeys.length; i++) {
+            const key = wrapKeys[i];
+            if (Array.isArray(data[key])) return data[key];
+        }
+        return null;
+    }
+
+    function recordsToFeatures(list) {
+        if (!list.length) throw new Error('JSON 数据列表为空');
+        if (list[0] && list[0].type === 'Feature') {
+            return { type: 'FeatureCollection', features: list };
+        }
+        const features = list.map(function (item, idx) {
+            const coord = extractLngLat(item);
+            if (!coord || isNaN(coord[0]) || isNaN(coord[1])) {
+                throw new Error('第 ' + (idx + 1) + ' 条记录缺少有效经纬度（支持 lng/lon/latitude/longitude/经度/纬度 等）');
+            }
+            return {
+                type: 'Feature',
+                geometry: { type: 'Point', coordinates: coord },
+                properties: Object.assign({}, item)
+            };
+        });
+        return { type: 'FeatureCollection', features: features };
+    }
+
     function normalizeToFeatureCollection(data) {
         if (!data) throw new Error('数据为空');
         if (data.type === 'FeatureCollection') return data;
@@ -34,23 +114,11 @@ const CoordFileConverter = (function () {
         if (data.type && data.coordinates) {
             return { type: 'FeatureCollection', features: [{ type: 'Feature', geometry: data, properties: {} }] };
         }
-        if (Array.isArray(data)) {
-            if (data.length && data[0].type === 'Feature') {
-                return { type: 'FeatureCollection', features: data };
-            }
-            const features = data.map(function (item, idx) {
-                const lng = item.lng ?? item.lon ?? item.longitude ?? item.x;
-                const lat = item.lat ?? item.latitude ?? item.y;
-                if (lng == null || lat == null) throw new Error('第 ' + (idx + 1) + ' 条 JSON 记录缺少坐标字段');
-                return {
-                    type: 'Feature',
-                    geometry: { type: 'Point', coordinates: [Number(lng), Number(lat)] },
-                    properties: Object.assign({}, item)
-                };
-            });
-            return { type: 'FeatureCollection', features: features };
-        }
-        throw new Error('无法识别的 JSON 结构，需为 GeoJSON 或坐标数组');
+
+        const list = unwrapRecordList(data);
+        if (list) return recordsToFeatures(list);
+
+        throw new Error('无法识别的 JSON 结构，需为 GeoJSON、坐标数组或 {"data":[...]} 格式');
     }
 
     function transformGeoJSON(geojson, fromCrs, toCrs, precision) {

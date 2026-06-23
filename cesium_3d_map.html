@@ -1,0 +1,1405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cesium 三维地图</title>
+    <link href="Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="Cesium/Cesium.js"></script>
+    <script src="turf.min.js"></script>
+    <script src="wellknown.js"></script>
+    <script src="coord_file_converter.js"></script>
+    <script src="cesium_layer_manager.js?v=20250618g"></script>
+    <script src="cesium_measure_tools.js"></script>
+    <script src="cesium_spatial_analysis.js"></script>
+    <script src="cesium_trajectory.js?v=20250618b"></script>
+    <script src="shaanxi_globe_viz.js?v=20250618h"></script>
+    <script src="cesium_map_ui.js?v=20250618c"></script>
+    <style>
+        body { margin: 0; padding: 0; height: 100vh; font-family: 'Microsoft YaHei', Arial, sans-serif; overflow: hidden; }
+        #cesiumContainer { width: 100%; height: 100%; position: relative; overflow: hidden; }
+        #viz-scene-bg {
+            position: absolute; inset: 0; z-index: 0; display: none;
+            background: #3a3a3a center center / cover no-repeat;
+            pointer-events: none;
+        }
+        #cesiumContainer .cesium-viewer { position: relative; z-index: 1; }
+        #viz-layer-popup {
+            position: absolute; display: none; z-index: 1100;
+            max-width: 300px; max-height: 260px; overflow-y: auto;
+            padding: 12px 14px; pointer-events: none;
+            background: rgba(12, 22, 40, 0.92);
+            border: 1px solid rgba(24, 144, 255, 0.35);
+            border-radius: 6px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+            font-size: 13px; color: rgba(255, 255, 255, 0.88);
+        }
+        #viz-layer-popup .viz-layer-popup-title {
+            font-weight: bold; margin-bottom: 8px; padding-bottom: 6px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.12); color: #69c0ff;
+        }
+        #viz-layer-popup .viz-layer-popup-row { margin: 4px 0; line-height: 1.45; }
+        #viz-layer-popup .viz-layer-popup-row .k { color: rgba(255, 255, 255, 0.55); margin-right: 8px; }
+        #viz-layer-popup .viz-layer-popup-row .v { color: #fff; word-break: break-all; }
+        #layer-map-popup {
+            position: absolute; display: none; z-index: 1100;
+            max-width: 300px; max-height: 260px; overflow-y: auto;
+            padding: 12px 14px; pointer-events: auto;
+            background: #fff; border-radius: 6px;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+            font-size: 13px; color: #666;
+        }
+        #layer-map-popup .viz-layer-popup-title {
+            font-weight: bold; margin-bottom: 8px; padding-bottom: 6px;
+            border-bottom: 1px solid #eee; color: #333;
+        }
+        #layer-map-popup .viz-layer-popup-row { margin: 4px 0; line-height: 1.45; }
+        #layer-map-popup .viz-layer-popup-row .k { color: #999; margin-right: 8px; }
+        #layer-map-popup .viz-layer-popup-row .v { color: #666; word-break: break-all; }
+        #cesiumContainer .cesium-selection-wrapper {
+            transition: width 0.12s ease, height 0.12s ease, opacity 0.2s ease-in;
+        }
+        #layer-panel {
+            width: 400px; background: #f5f7fa; border-right: 1px solid #e4e7ed;
+            display: flex; flex-direction: column;
+            box-shadow: 2px 0 16px rgba(0,0,0,0.08);
+            overflow: hidden; transition: width 0.3s ease;
+            position: absolute; left: 0; top: 0; bottom: 0; z-index: 999;
+        }
+        #layer-panel.collapsed { width: 0; padding: 0; border: none; box-shadow: none; overflow: visible; }
+        #toggle-layer-panel {
+            position: absolute; top: 50%; transform: translateY(-50%);
+            width: 22px; height: 72px; background: #fff; border: 1px solid #e4e7ed;
+            border-left: none; border-radius: 0 6px 6px 0; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 16px; color: #909399; z-index: 1001;
+            box-shadow: 2px 0 8px rgba(0,0,0,0.06);
+            transition: left 0.3s ease, color 0.2s, background 0.2s;
+        }
+        body.layer-panel-open #toggle-layer-panel { left: 400px; }
+        body:not(.layer-panel-open) #toggle-layer-panel { left: 0; }
+        #toggle-layer-panel:hover { background: #ecf5ff; color: #409eff; border-color: #b3d8ff; }
+        #layer-panel .panel-content {
+            flex: 1; display: flex; flex-direction: column; overflow: hidden;
+            min-width: 368px; padding: 0;
+        }
+        #layer-panel.collapsed .panel-content { display: none; }
+        .left-panel-header {
+            padding: 14px 16px 12px; background: linear-gradient(135deg, #409eff 0%, #337ecc 100%);
+            color: #fff; flex-shrink: 0;
+        }
+        .left-panel-header h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: 0.5px; }
+        .left-panel-header p { margin: 4px 0 0; font-size: 11px; opacity: 0.85; }
+        .left-panel-tabs {
+            display: flex; gap: 4px; padding: 10px 8px 0; background: #fff;
+            border-bottom: 1px solid #ebeef5; flex-shrink: 0; flex-wrap: wrap;
+        }
+        .left-panel-tab {
+            flex: 1; min-width: 70px; padding: 8px 4px; border: none; background: transparent; cursor: pointer;
+            font-size: 11px; color: #606266; border-radius: 6px 6px 0 0;
+            transition: color 0.2s, background 0.2s; position: relative;
+        }
+        .left-panel-tab:hover { color: #409eff; background: #f5f7fa; }
+        .left-panel-tab.active { color: #409eff; font-weight: 600; background: #ecf5ff; }
+        .left-panel-tab.active::after {
+            content: ''; position: absolute; left: 8px; right: 8px; bottom: 0;
+            height: 2px; background: #409eff; border-radius: 1px;
+        }
+        .left-tab-panel {
+            display: none; flex: 1; flex-direction: column; overflow-y: auto;
+            min-height: 0; padding: 12px; gap: 10px;
+        }
+        .left-tab-panel.active { display: flex; }
+        .left-tab-panel::-webkit-scrollbar { width: 5px; }
+        .left-tab-panel::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 3px; }
+        .left-section {
+            background: #fff; border-radius: 8px; padding: 12px;
+            border: 1px solid #ebeef5; box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+        }
+        .left-section-title {
+            font-size: 13px; font-weight: 600; color: #303133;
+            margin: 0 0 10px; padding-bottom: 8px; border-bottom: 1px solid #f0f2f5;
+        }
+        .layer-add-tabs { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+        .layer-add-tab {
+            padding: 5px 12px; border: 1px solid #e4e7ed; background: #f5f7fa;
+            border-radius: 16px; cursor: pointer; font-size: 11px; color: #606266;
+            transition: all 0.2s;
+        }
+        .layer-add-tab:hover { border-color: #c6e2ff; color: #409eff; }
+        .layer-add-tab.active { background: #409eff; color: #fff; border-color: #409eff; }
+        .layer-add-panel { display: none; }
+        .layer-add-panel.active { display: block; }
+        .layer-field { margin-bottom: 10px; }
+        .layer-field:last-child { margin-bottom: 0; }
+        .layer-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 5px; font-weight: 500; }
+        .layer-field input, .layer-field select, .layer-field textarea {
+            width: 100%; padding: 7px 10px; border: 1px solid #dcdfe6; border-radius: 6px;
+            font-size: 13px; box-sizing: border-box; outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s; background: #fff;
+        }
+        .layer-field input:focus, .layer-field select:focus, .layer-field textarea:focus {
+            border-color: #409eff; box-shadow: 0 0 0 2px rgba(64,158,255,0.15);
+        }
+        .layer-field textarea { min-height: 60px; resize: vertical; font-family: Consolas, monospace; font-size: 12px; }
+        .import-type-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+        .import-type-btn {
+            padding: 4px 10px; border: 1px solid #e4e7ed; background: #f5f7fa;
+            border-radius: 14px; cursor: pointer; font-size: 11px; color: #606266;
+            transition: all 0.2s;
+        }
+        .import-type-btn:hover { border-color: #c2e7b0; color: #67c23a; }
+        .import-type-btn.active { background: #67c23a; color: #fff; border-color: #67c23a; }
+        .layer-btn {
+            width: 100%; padding: 9px; border: none; border-radius: 6px;
+            background: #409eff; color: #fff; cursor: pointer; font-size: 13px; margin-top: 8px;
+            font-weight: 500; transition: background 0.2s;
+        }
+        .layer-btn:hover { background: #66b1ff; }
+        .layer-btn.secondary { background: #fff; color: #606266; border: 1px solid #dcdfe6; margin-top: 6px; }
+        .layer-btn.secondary:hover { background: #f5f7fa; }
+        .layer-list-wrap { flex: 1; display: flex; flex-direction: column; min-height: 100px; }
+        .layer-list-title { font-size: 13px; color: #303133; margin-bottom: 8px; font-weight: 600; }
+        #layer-list { flex: 1; overflow-y: auto; max-height: 280px; border: 1px solid #ebeef5; border-radius: 6px; background: #fafbfc; }
+        .layer-empty { padding: 24px 16px; text-align: center; color: #c0c4cc; font-size: 12px; }
+        .layer-item { padding: 8px 10px; border-bottom: 1px solid #f0f2f5; font-size: 13px; }
+        .layer-item:hover { background: #f5f7fa; }
+        .layer-item-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+        .layer-item-main { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; cursor: pointer; }
+        .layer-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #303133; min-width: 0; }
+        .layer-type { font-size: 10px; color: #909399; background: #f0f2f5; padding: 2px 7px; border-radius: 10px; flex-shrink: 0; }
+        .layer-item-actions { display: flex; gap: 6px; margin-top: 6px; padding-left: 22px; }
+        .layer-order-btns { display: flex; align-items: center; gap: 3px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 52%; }
+        .layer-order-btn {
+            border: 1px solid #e4e7ed; background: #fff; color: #606266; cursor: pointer;
+            font-size: 10px; line-height: 1; padding: 3px 5px; border-radius: 4px;
+        }
+        .layer-order-btn:hover:not(:disabled) { background: #ecf5ff; color: #409eff; }
+        .layer-order-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .layer-del { border: none; background: transparent; color: #f56c6c; cursor: pointer; font-size: 16px; padding: 2px 6px; }
+        .layer-action-btn {
+            border: 1px solid #dcdfe6; background: #fff; color: #606266; cursor: pointer;
+            font-size: 11px; line-height: 1.2; padding: 3px 8px; border-radius: 4px; white-space: nowrap;
+        }
+        .layer-action-btn:hover { background: #ecf5ff; color: #409eff; border-color: #b3d8ff; }
+        .layer-btn-locate { color: #409eff; border-color: #b3d8ff; }
+        .layer-btn-style { color: #67c23a; border-color: #c2e7b0; }
+        .layer-btn-style:hover { background: #f0f9eb; color: #67c23a; border-color: #67c23a; }
+        .layer-style-modal {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 2000;
+            display: none; align-items: center; justify-content: center; padding: 16px;
+        }
+        .layer-style-modal.show { display: flex; }
+        .layer-style-dialog {
+            width: 100%; max-width: 420px; max-height: 90vh; background: #fff;
+            border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); display: flex; flex-direction: column;
+        }
+        .layer-style-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 16px; border-bottom: 1px solid #ebeef5;
+        }
+        .layer-style-header h3 { margin: 0; font-size: 15px; color: #303133; }
+        .layer-style-close { border: none; background: none; font-size: 20px; color: #909399; cursor: pointer; }
+        .layer-style-body { padding: 12px 16px; overflow-y: auto; flex: 1; }
+        .style-section-title { font-size: 12px; font-weight: 600; color: #606266; margin: 8px 0 6px; }
+        .style-row { display: flex; gap: 8px; margin-bottom: 8px; }
+        .style-field { flex: 1; margin-bottom: 8px; }
+        .style-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 4px; }
+        .style-field input, .style-field select {
+            width: 100%; padding: 6px 8px; border: 1px solid #dcdfe6; border-radius: 4px; box-sizing: border-box;
+        }
+        .style-icon-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .style-icon-row input[type="file"] { flex: 1; min-width: 120px; font-size: 12px; }
+        .style-icon-preview { width: 32px; height: 32px; object-fit: contain; border: 1px solid #dcdfe6; border-radius: 4px; background: #f5f7fa; }
+        .style-icon-clear { padding: 4px 10px; border: 1px solid #dcdfe6; background: #fff; border-radius: 4px; cursor: pointer; font-size: 12px; color: #606266; }
+        .style-icon-clear:hover { color: #409eff; border-color: #b3d8ff; }
+        .layer-style-footer {
+            display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid #ebeef5;
+        }
+        .layer-style-footer button {
+            padding: 7px 16px; border-radius: 4px; border: 1px solid #dcdfe6; cursor: pointer; font-size: 13px;
+        }
+        .layer-style-footer .btn-cancel { background: #fff; color: #606266; }
+        .layer-style-footer .btn-apply { background: #409eff; color: #fff; border-color: #409eff; }
+        #layer-import-text {
+            width: 100%; min-height: 72px; padding: 8px; border: 1px solid #dcdfe6;
+            border-radius: 6px; font-size: 12px; box-sizing: border-box; resize: vertical;
+        }
+        #layer-imagery-custom-code {
+            width: 100%; min-height: 120px; padding: 8px; border: 1px solid #dcdfe6;
+            border-radius: 6px; font-size: 12px; font-family: Consolas, monospace; box-sizing: border-box;
+        }
+        .layer-opacity-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding-left: 22px; }
+        .layer-opacity-label { font-size: 11px; color: #909399; width: 36px; }
+        .layer-opacity-slider { flex: 1; accent-color: #409eff; }
+        .layer-opacity-value { font-size: 11px; color: #606266; width: 34px; text-align: right; }
+        .interp-field { margin-bottom: 10px; }
+        .interp-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 5px; font-weight: 500; }
+        .interp-field input, .interp-field select {
+            width: 100%; padding: 7px 10px; border: 1px solid #dcdfe6; border-radius: 6px;
+            font-size: 13px; box-sizing: border-box; background: #fff; outline: none;
+        }
+        .interp-row { display: flex; gap: 8px; }
+        .interp-row .interp-field { flex: 1; }
+        .interp-btn {
+            width: 100%; padding: 9px; border: none; border-radius: 6px;
+            background: #409eff; color: #fff; cursor: pointer; font-size: 13px; margin-top: 6px;
+            font-weight: 500;
+        }
+        .interp-btn:hover { background: #66b1ff; }
+        .interp-btn.secondary { background: #fff; color: #606266; border: 1px solid #dcdfe6; }
+        .interp-legend { margin-top: 10px; font-size: 12px; padding: 8px; background: #fafbfc; border-radius: 6px; border: 1px solid #ebeef5; }
+        .interp-legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; color: #606266; }
+        .interp-legend-color { width: 28px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.08); }
+        .panel-hint { font-size: 11px; color: #909399; margin: 0 0 10px; line-height: 1.5; }
+        .url-hint { font-size: 11px; color: #c0c4cc; line-height: 1.5; margin-bottom: 6px; word-break: break-all; }
+        .spatial-sub-tabs { display: flex; gap: 4px; margin-bottom: 10px; flex-wrap: wrap; }
+        .spatial-sub-tab {
+            padding: 4px 10px; border: 1px solid #e4e7ed; background: #f5f7fa;
+            border-radius: 14px; cursor: pointer; font-size: 11px; color: #606266;
+        }
+        .spatial-sub-tab.active { background: #67c23a; color: #fff; border-color: #67c23a; }
+        .spatial-panel { display: none; }
+        .spatial-panel.active { display: block; }
+        .track-mode-row { display: flex; gap: 6px; margin-bottom: 10px; }
+        .track-mode-btn {
+            flex: 1; padding: 8px 4px; border: 1px solid #e4e7ed; background: #f5f7fa;
+            border-radius: 6px; cursor: pointer; font-size: 12px; color: #606266; text-align: center;
+        }
+        .track-mode-btn.active { background: #409eff; color: #fff; border-color: #409eff; }
+        .track-draw-btn.active { background: #67c23a; color: #fff; border-color: #67c23a; }
+        #spatial-result, #track-info {
+            margin-top: 10px; font-size: 12px; color: #606266; white-space: pre-line;
+            border: 1px solid #ebeef5; border-radius: 6px; padding: 10px; background: #fafbfc; line-height: 1.6;
+        }
+        body.layer-panel-open #coord-input-panel,
+        body.layer-panel-open #pick-result-panel { left: 470px; }
+        /* 左侧工具栏 */
+        #map-ui-left {
+            position: absolute; top: 10px; left: 10px; z-index: 110;
+            transition: left 0.3s ease;
+        }
+        body.layer-panel-open #map-ui-left { left: 410px; }
+        #map-ui-toolbar {
+            display: flex; flex-direction: column; gap: 2px;
+            background: rgba(35, 38, 48, 0.92); border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 4px; padding: 4px; box-shadow: 0 2px 12px rgba(0,0,0,0.35);
+        }
+        .map-ui-tool-btn {
+            width: 34px; height: 34px; border: none; border-radius: 3px;
+            background: transparent; color: rgba(255,255,255,0.88);
+            font-size: 16px; cursor: pointer; line-height: 1;
+        }
+        .map-ui-tool-btn:hover { background: rgba(24,144,255,0.18); color: #fff; }
+        .map-ui-tool-btn.active { background: rgba(24,144,255,0.42); color: #fff; }
+        .map-ui-tool-divider { height: 1px; margin: 2px 4px; background: rgba(255,255,255,0.1); }
+        /* 右侧 Mars3D 风格面板 */
+        #map-ui-right {
+            position: absolute; top: 10px; right: 10px; z-index: 110;
+            display: flex; flex-direction: column; align-items: flex-end;
+        }
+        .map-ui-tabs {
+            display: flex; background: rgba(35, 38, 48, 0.92);
+            border: 1px solid rgba(255,255,255,0.08); border-radius: 4px;
+            overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,0.35);
+        }
+        .map-ui-tab {
+            padding: 8px 14px; border: none; background: transparent;
+            color: rgba(255,255,255,0.75); font-size: 13px; cursor: pointer;
+            display: flex; align-items: center; gap: 6px; white-space: nowrap;
+            transition: background 0.2s, color 0.2s;
+        }
+        .map-ui-tab:hover { color: #fff; background: rgba(255,255,255,0.06); }
+        .map-ui-tab.active { background: #1890ff; color: #fff; }
+        #map-ui-panel {
+            margin-top: 6px; width: 280px; max-height: calc(100vh - 120px);
+            background: rgba(35, 38, 48, 0.94); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 4px; box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+            overflow: hidden; transition: opacity 0.2s, transform 0.2s;
+        }
+        #map-ui-panel.collapsed { display: none; }
+        .ui-panel-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.08);
+            color: #fff; font-size: 13px; font-weight: 600;
+        }
+        .ui-panel-close {
+            border: none; background: transparent; color: rgba(255,255,255,0.6);
+            font-size: 18px; cursor: pointer; line-height: 1; padding: 0 4px;
+        }
+        .ui-panel-close:hover { color: #fff; }
+        .ui-panel-content { display: none; padding: 10px; overflow-y: auto; max-height: 520px; }
+        .ui-panel-content.active { display: block; }
+        .ui-panel-content::-webkit-scrollbar { width: 4px; }
+        .ui-panel-content::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); }
+        #ui-basemap-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;
+        }
+        .basemap-item {
+            cursor: pointer; border: 2px solid transparent; border-radius: 4px;
+            overflow: hidden; transition: border-color 0.2s;
+        }
+        .basemap-item:hover { border-color: rgba(24,144,255,0.5); }
+        .basemap-item.active { border-color: #1890ff; }
+        .basemap-thumb { height: 52px; background-size: cover; background-position: center; }
+        .thumb-sat { background: linear-gradient(135deg, #2d5016, #4a7c23, #1a3a0a); }
+        .thumb-sat2 { background: linear-gradient(135deg, #1e4d2b, #3d7a45, #0f2918); }
+        .thumb-vec { background: linear-gradient(180deg, #e8f0e8 30%, #b8d4b8 60%, #f5f5f5); }
+        .thumb-road { background: linear-gradient(180deg, #f0f4f0, #d0e8d0 50%, #e0e8f0); }
+        .thumb-none { background: repeating-linear-gradient(45deg, #2a2a2a, #2a2a2a 6px, #333 6px, #333 12px); }
+        .thumb-dark { background: radial-gradient(circle at 30% 30%, #1a3050, #0a1525); }
+        .thumb-blue {
+            background: linear-gradient(160deg, #050d18 0%, #0a1e3d 45%, #123a6b 100%);
+            position: relative; overflow: hidden;
+        }
+        .thumb-blue::before {
+            content: ''; position: absolute; inset: 18% 12% 28% 12%;
+            border: 1px solid rgba(80, 180, 255, 0.55);
+            box-shadow: 0 0 6px rgba(64, 169, 255, 0.35);
+            border-radius: 2px;
+        }
+        .thumb-blue::after {
+            content: ''; position: absolute; left: 20%; right: 20%; top: 42%; height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(100, 200, 255, 0.8), transparent);
+            box-shadow: 0 8px 0 rgba(100, 200, 255, 0.35), 0 16px 0 rgba(100, 200, 255, 0.2);
+        }
+        .basemap-name {
+            font-size: 11px; color: rgba(255,255,255,0.85); text-align: center;
+            padding: 4px 2px; background: rgba(0,0,0,0.35);
+        }
+        .basemap-item.active .basemap-name { color: #69c0ff; }
+        #ui-basemap-settings {
+            margin-top: 12px; padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+        }
+        .ui-basemap-terrain {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 12px; color: rgba(255,255,255,0.85); margin-bottom: 12px; cursor: pointer;
+        }
+        .ui-basemap-terrain input { width: 14px; height: 14px; cursor: pointer; }
+        .ui-basemap-style-title {
+            font-size: 12px; color: rgba(255,255,255,0.65); margin-bottom: 8px;
+        }
+        .ui-basemap-slider-row {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+        }
+        .ui-basemap-slider-row label {
+            flex: 0 0 72px; font-size: 11px; color: rgba(255,255,255,0.6);
+        }
+        .ui-basemap-slider-row input[type="range"] {
+            flex: 1; min-width: 0; height: 4px; accent-color: #1890ff;
+        }
+        .ui-basemap-slider-row .slider-val {
+            flex: 0 0 36px; font-size: 11px; color: rgba(255,255,255,0.75);
+            text-align: right; font-family: Consolas, monospace;
+        }
+        .ui-basemap-color-row {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+        }
+        .ui-basemap-color-row label {
+            flex: 0 0 72px; font-size: 11px; color: rgba(255,255,255,0.6);
+        }
+        .ui-basemap-color-row input[type="color"] {
+            width: 36px; height: 26px; padding: 0; border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 3px; background: transparent; cursor: pointer;
+        }
+        .ui-basemap-color-row .slider-val {
+            flex: 1; font-size: 11px; color: rgba(255,255,255,0.75);
+            font-family: Consolas, monospace;
+        }
+        .ui-viz-hint {
+            font-size: 11px; color: rgba(255,255,255,0.5); line-height: 1.5; margin-bottom: 10px;
+        }
+        .ui-viz-label {
+            display: block; font-size: 12px; color: rgba(255,255,255,0.65); margin-bottom: 6px;
+        }
+        #viz-region-select {
+            width: 100%; padding: 7px 8px; margin-bottom: 12px; box-sizing: border-box;
+            border: 1px solid rgba(255,255,255,0.15); border-radius: 3px;
+            background: rgba(0,0,0,0.25); color: #fff; font-size: 13px;
+        }
+        .ui-viz-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+        .ui-viz-btn {
+            flex: 1; min-width: 72px; padding: 7px 10px; border: none; border-radius: 3px;
+            background: #1890ff; color: #fff; font-size: 12px; cursor: pointer;
+        }
+        .ui-viz-btn.secondary { background: rgba(255,255,255,0.12); }
+        .ui-viz-btn.cancel { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); }
+        .ui-viz-btn:hover { filter: brightness(1.08); }
+        #ui-tool-menu { display: flex; flex-direction: column; gap: 2px; }
+        .ui-tool-item {
+            display: flex; align-items: center; gap: 10px; width: 100%;
+            padding: 9px 10px; border: none; border-radius: 3px;
+            background: transparent; color: rgba(255,255,255,0.88);
+            font-size: 13px; cursor: pointer; text-align: left;
+        }
+        .ui-tool-item:hover { background: rgba(24,144,255,0.15); color: #fff; }
+        .ui-tool-item.active { background: rgba(24,144,255,0.35); color: #fff; }
+        .ui-tool-icon { width: 18px; text-align: center; }
+        /* 底部状态栏 */
+        #map-status-bar {
+            position: absolute; left: 0; right: 0; bottom: 0; height: 32px;
+            background: rgba(35, 38, 48, 0.88); border-top: 1px solid rgba(255,255,255,0.08);
+            display: flex; align-items: center; padding: 0 12px; z-index: 110;
+            font-size: 12px; color: rgba(255,255,255,0.82); gap: 16px;
+            pointer-events: none;
+        }
+        .status-scale { display: flex; align-items: center; gap: 6px; min-width: 100px; }
+        #status-scale-bar { height: 6px; border: 1px solid rgba(255,255,255,0.5); border-top: none; width: 80px; }
+        #status-scale-label { font-size: 11px; color: rgba(255,255,255,0.65); }
+        .status-info { display: flex; flex-wrap: wrap; gap: 14px; flex: 1; justify-content: flex-end; }
+        .status-info span { white-space: nowrap; }
+        .status-info em { font-style: normal; color: rgba(255,255,255,0.5); margin-right: 4px; }
+        /* 浮动面板深色 */
+        #coord-input-panel, #pick-result-panel {
+            position: absolute; top: 60px; right: 300px;
+            background: rgba(35, 38, 48, 0.95); border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 4px; padding: 14px; box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            z-index: 120; display: none; color: #fff;
+        }
+        #coord-input-panel.show, #pick-result-panel.show { display: block; }
+        #coord-input-panel label { font-size: 12px; color: rgba(255,255,255,0.65); }
+        #coord-input-panel input {
+            width: 180px; margin-bottom: 8px; padding: 7px 8px;
+            border: 1px solid rgba(255,255,255,0.15); border-radius: 3px;
+            background: rgba(0,0,0,0.25); color: #fff; display: block; box-sizing: border-box;
+        }
+        #coord-input-panel button, #pick-result-panel button {
+            padding: 6px 14px; background: #1890ff; color: #fff; border: none;
+            border-radius: 3px; cursor: pointer; margin-right: 8px; font-size: 12px;
+        }
+        #pick-result-panel .result-item { margin-bottom: 8px; font-size: 13px; }
+        #pick-result-panel .result-label { color: rgba(255,255,255,0.55); margin-right: 5px; }
+        #pick-result-panel .result-value { font-weight: bold; font-family: Consolas, monospace; color: #69c0ff; }
+        #measure-result {
+            position: absolute; bottom: 42px; left: 50%; transform: translateX(-50%);
+            background: rgba(35, 38, 48, 0.94); border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 4px; padding: 10px 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.35);
+            z-index: 120; display: none; font-size: 13px; color: #fff;
+        }
+        #measure-result.show { display: block; }
+        #measure-result button {
+            margin-left: 10px; padding: 3px 10px; font-size: 12px;
+            border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08);
+            color: #fff; border-radius: 3px; cursor: pointer;
+        }
+        .cesium-viewer-bottom, .cesium-viewer-toolbar,
+        .cesium-viewer-fullscreenContainer { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="cesiumContainer">
+        <div id="viz-scene-bg"></div>
+        <div id="viz-layer-popup"></div>
+        <div id="layer-map-popup"></div>
+    </div>
+
+    <div id="toggle-layer-panel" onclick="toggleLayerPanel()">›</div>
+
+    <div id="layer-panel" class="collapsed">
+        <div class="panel-content">
+            <div class="left-panel-header">
+                <h2>三维地图工具箱</h2>
+                <p>图层管理 · 空间分析 · 轨迹模拟</p>
+            </div>
+            <div class="left-panel-tabs">
+                <button type="button" class="left-panel-tab active" data-ltab="layers" onclick="switchLeftPanelTab('layers')">图层管理</button>
+                <button type="button" class="left-panel-tab" data-ltab="spatial" onclick="switchLeftPanelTab('spatial')">空间分析</button>
+                <button type="button" class="left-panel-tab" data-ltab="track" onclick="switchLeftPanelTab('track')">轨迹模拟</button>
+            </div>
+
+            <!-- 图层管理 -->
+            <div id="left-tab-layers" class="left-tab-panel active">
+                <div class="left-section">
+                    <div class="left-section-title">添加图层</div>
+                    <div class="layer-add-tabs">
+                        <button type="button" class="layer-add-tab active" data-tab="3dtiles" onclick="CesiumLayerManager.switchAddTab('3dtiles')">3D Tiles</button>
+                        <button type="button" class="layer-add-tab" data-tab="model" onclick="CesiumLayerManager.switchAddTab('model')">模型</button>
+                        <button type="button" class="layer-add-tab" data-tab="imagery" onclick="CesiumLayerManager.switchAddTab('imagery')">影像</button>
+                        <button type="button" class="layer-add-tab" data-tab="terrain" onclick="CesiumLayerManager.switchAddTab('terrain')">地形</button>
+                        <button type="button" class="layer-add-tab" data-tab="import" onclick="CesiumLayerManager.switchAddTab('import')">导入</button>
+                    </div>
+
+                    <div id="layer-add-3dtiles" class="layer-add-panel active">
+                        <div class="panel-hint">支持 3D Tiles 1.0 标准，如倾斜摄影、BIM、点云等</div>
+                        <div class="layer-field">
+                            <label>3D Tiles URL</label>
+                            <input type="text" id="layer-3dtiles-url" placeholder="https://.../tileset.json">
+                        </div>
+                        <div class="layer-field">
+                            <label>图层名称</label>
+                            <input type="text" id="layer-3dtiles-name" placeholder="可选">
+                        </div>
+                        <button type="button" class="layer-btn" onclick="submitLayer('3dtiles')">添加 3D Tiles</button>
+                    </div>
+
+                    <div id="layer-add-model" class="layer-add-panel">
+                        <div class="panel-hint">glTF / GLB 模型，支持在线 URL 或本地路径</div>
+                        <div class="layer-field">
+                            <label>模型 URL</label>
+                            <input type="text" id="layer-model-url" placeholder="https://.../model.glb">
+                        </div>
+                        <div class="interp-row">
+                            <div class="layer-field"><label>经度</label><input type="text" id="layer-model-lng" value="116.39"></div>
+                            <div class="layer-field"><label>纬度</label><input type="text" id="layer-model-lat" value="39.9"></div>
+                        </div>
+                        <div class="interp-row">
+                            <div class="layer-field"><label>高度(m)</label><input type="text" id="layer-model-height" value="0"></div>
+                            <div class="layer-field"><label>缩放</label><input type="text" id="layer-model-scale" value="1"></div>
+                        </div>
+                        <div class="layer-field"><label>名称</label><input type="text" id="layer-model-name" placeholder="可选"></div>
+                        <button type="button" class="layer-btn" onclick="submitLayer('model')">添加模型</button>
+                    </div>
+
+                    <div id="layer-add-imagery" class="layer-add-panel">
+                        <div class="layer-field">
+                            <label>影像类型</label>
+                            <select id="layer-imagery-type" onchange="CesiumLayerManager.updateImageryForm(this.value)">
+                                <option value="xyz">XYZ 瓦片（十进制）</option>
+                                <option value="xyz_hex">ArcGIS 十六进制缓存切片</option>
+                                <option value="arcgis">ArcGIS MapServer</option>
+                                <option value="wms">WMS</option>
+                                <option value="custom">自定义（图层代码）</option>
+                            </select>
+                        </div>
+                        <div class="layer-field" id="layer-imagery-url-box">
+                            <label>服务 URL</label>
+                            <input type="text" id="layer-imagery-url" placeholder="https://.../tile/{z}/{x}/{y}.png">
+                        </div>
+                        <div class="panel-hint" id="layer-imagery-hex-hint" style="display:none;">
+                            十六进制切片目录，如 .../Layers/_alllayers/，瓦片路径 L{z}/R{y}/C{x}.png
+                        </div>
+                        <div class="layer-field" id="layer-imagery-proj-box">
+                            <label>坐标系</label>
+                            <select id="layer-imagery-projection" onchange="CesiumLayerManager.updateImageryForm(document.getElementById('layer-imagery-type').value)">
+                                <option value="EPSG:3857">EPSG:3857（Web Mercator）</option>
+                                <option value="EPSG:4326">EPSG:4326（WGS84 经纬度）</option>
+                                <option value="EPSG:4490">EPSG:4490（CGCS2000 经纬度）</option>
+                            </select>
+                        </div>
+                        <div class="panel-hint" id="layer-imagery-proj-hint" style="display:none;">
+                            EPSG:4490：XYZ 瓦片 z 为 level+1；十六进制切片 L 为 level+1。EPSG:4326 十六进制为 L{level}。
+                        </div>
+                        <div class="layer-field" id="layer-wms-box" style="display:none;">
+                            <label>WMS Layers</label>
+                            <input type="text" id="layer-wms-layers" placeholder="图层名">
+                        </div>
+                        <div class="layer-field" id="layer-imagery-custom-box" style="display:none;">
+                            <label>图层代码（return ImageryProvider）</label>
+                            <textarea id="layer-imagery-custom-code" placeholder="可用 viewer, Cesium, zeroPad"></textarea>
+                        </div>
+                        <div class="layer-field"><label>名称</label><input type="text" id="layer-imagery-name" placeholder="可选"></div>
+                        <button type="button" class="layer-btn" onclick="submitLayer('imagery')">添加影像</button>
+                    </div>
+
+                    <div id="layer-add-terrain" class="layer-add-panel">
+                        <div class="panel-hint">地形服务需配置 Cesium Ion Token 方可使用全球地形</div>
+                        <div class="layer-field">
+                            <label>地形类型</label>
+                            <select id="layer-terrain-type">
+                                <option value="cesium">Cesium World Terrain</option>
+                                <option value="ellipsoid">椭球（无高程）</option>
+                            </select>
+                        </div>
+                        <button type="button" class="layer-btn" onclick="submitLayer('terrain')">启用地形</button>
+                    </div>
+
+                    <div id="layer-add-import" class="layer-add-panel">
+                        <div class="import-type-row">
+                            <button type="button" class="import-type-btn active" data-import="geojson" onclick="CesiumLayerManager.switchImportType('geojson')">GeoJSON</button>
+                            <button type="button" class="import-type-btn" data-import="json" onclick="CesiumLayerManager.switchImportType('json')">JSON</button>
+                            <button type="button" class="import-type-btn" data-import="csv" onclick="CesiumLayerManager.switchImportType('csv')">CSV</button>
+                            <button type="button" class="import-type-btn" data-import="wkt" onclick="CesiumLayerManager.switchImportType('wkt')">WKT</button>
+                            <button type="button" class="import-type-btn" data-import="kml" onclick="CesiumLayerManager.switchImportType('kml')">KML/KMZ</button>
+                            <button type="button" class="import-type-btn" data-import="czml" onclick="CesiumLayerManager.switchImportType('czml')">CZML</button>
+                            <button type="button" class="import-type-btn" data-import="gltf" onclick="CesiumLayerManager.switchImportType('gltf')">glTF本地</button>
+                        </div>
+                        <div class="panel-hint">坐标均为 WGS84（EPSG:4326）</div>
+                        <div class="layer-field" id="layer-import-file-box">
+                            <label>选择文件</label>
+                            <input type="file" id="layer-import-file" accept=".geojson,.json,.csv,.txt,.wkt,.kml,.kmz,.czml,.gltf,.glb">
+                        </div>
+                        <div class="layer-field" id="layer-import-text-box">
+                            <label>坐标文本输入</label>
+                            <textarea id="layer-import-text" placeholder="粘贴 GeoJSON / CSV / WKT"></textarea>
+                        </div>
+                        <div class="interp-row" id="layer-gltf-pos" style="display:none;">
+                            <div class="layer-field"><label>经度</label><input type="text" id="layer-gltf-lng" value="116.39"></div>
+                            <div class="layer-field"><label>纬度</label><input type="text" id="layer-gltf-lat" value="39.9"></div>
+                        </div>
+                        <div class="layer-field"><label>图层名称</label><input type="text" id="layer-import-name" placeholder="可选"></div>
+                        <button type="button" class="layer-btn" onclick="submitLayer('import')">导入图层</button>
+                    </div>
+                </div>
+                <div class="left-section layer-list-wrap">
+                    <div class="layer-list-title">图层列表</div>
+                    <div class="panel-hint" style="margin-bottom:6px;">矢量/模型/3D Tiles 图层显示「定位」；导入矢量显示「设置」</div>
+                    <div id="layer-list"></div>
+                </div>
+            </div>
+
+            <!-- 空间分析 -->
+            <div id="left-tab-spatial" class="left-tab-panel">
+                <div class="left-section">
+                    <div class="spatial-sub-tabs">
+                        <button type="button" class="spatial-sub-tab active" onclick="switchSpatialPanel('cutfill', this)">填挖方</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('flood', this)">淹没</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('heatmap', this)">热力图</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('slope', this)">坡度坡向</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('scene', this)">场景分析</button>
+                    </div>
+
+                    <div id="spatial-cutfill" class="spatial-panel active">
+                        <div class="panel-hint">左键绘制多边形顶点，右键结束。需加载地形服务。</div>
+                        <div class="interp-field"><label>设计标高 (m)</label><input type="number" id="cutfill-design-height" value="100"></div>
+                        <div class="interp-field"><label>采样格网密度</label><input type="number" id="cutfill-grid" value="25" min="10" max="50"></div>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runCutFill()">执行填挖方计算</button>
+                    </div>
+
+                    <div id="spatial-flood" class="spatial-panel">
+                        <div class="panel-hint">绘制淹没区域多边形，模拟水位上升过程</div>
+                        <div class="interp-row">
+                            <div class="interp-field"><label>起始水位(m)</label><input type="number" id="flood-start-level" value="0"></div>
+                            <div class="interp-field"><label>目标水位(m)</label><input type="number" id="flood-target-level" value="50"></div>
+                        </div>
+                        <div class="interp-field"><label>上升速度 (m/步)</label><input type="number" id="flood-speed" value="2" step="0.5"></div>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runFloodAnalysis()">开始淹没分析</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumSpatialAnalysis.stopFloodAnimation()">停止动画</button>
+                    </div>
+
+                    <div id="spatial-heatmap" class="spatial-panel">
+                        <div class="interp-field">
+                            <label>数据文件 (CSV / JSON / GeoJSON)</label>
+                            <input type="file" id="heatmap-file" accept=".csv,.json,.geojson">
+                        </div>
+                        <div class="interp-field"><label>数值字段</label><input type="text" id="heatmap-field" value="value"></div>
+                        <div class="interp-field"><label>格网列数</label><input type="number" id="heatmap-cols" value="40" min="10" max="100"></div>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runHeatmap('planar')">平面热力图</button>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runHeatmap('surface')">曲面贴地热力图</button>
+                    </div>
+
+                    <div id="spatial-slope" class="spatial-panel">
+                        <div class="panel-hint">绘制分析区域，计算坡度坡向（需地形）</div>
+                        <div class="interp-field"><label>采样格网</label><input type="number" id="slope-grid" value="30" min="10" max="50"></div>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runSlopeAspect()">坡度坡向分析</button>
+                    </div>
+
+                    <div id="spatial-scene" class="spatial-panel">
+                        <div class="interp-field"><label>视域 - 观察者高度(m)</label><input type="number" id="viewshed-observer-height" value="2"></div>
+                        <div class="interp-field"><label>视域 - 分析半径(m)</label><input type="number" id="viewshed-radius" value="1000"></div>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runViewshed()">视域分析</button>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runProfile()">地形剖面</button>
+                        <div class="interp-field" style="margin-top:10px;"><label>阴影 - 模拟时刻(时)</label><input type="number" id="shadow-hour" value="12" min="0" max="23"></div>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runShadowAnalysis()">阴影分析</button>
+                    </div>
+
+                    <button type="button" class="interp-btn secondary" onclick="CesiumSpatialAnalysis.clearAll()">清除分析结果</button>
+                    <div id="spatial-result"></div>
+                    <div class="interp-legend" id="spatial-legend"></div>
+                </div>
+            </div>
+
+            <!-- 轨迹模拟 -->
+            <div id="left-tab-track" class="left-tab-panel">
+                <div class="left-section">
+                    <div class="spatial-sub-tabs">
+                        <button type="button" class="spatial-sub-tab active" onclick="switchTrackPanel('draw', this)">轨迹绘制</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchTrackPanel('simulate', this)">轨迹模拟</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchTrackPanel('roam', this)">路径漫游</button>
+                    </div>
+
+                    <div class="track-mode-row">
+                        <button type="button" class="track-mode-btn active" data-mode="vehicle" onclick="CesiumTrajectory.setMode('vehicle')">🚗 车辆</button>
+                        <button type="button" class="track-mode-btn" data-mode="drone" onclick="CesiumTrajectory.setMode('drone')">🚁 无人机</button>
+                        <button type="button" class="track-mode-btn" data-mode="pedestrian" onclick="CesiumTrajectory.setMode('pedestrian')">🚶 人物</button>
+                    </div>
+
+                    <div id="track-draw" class="spatial-panel active">
+                        <div class="panel-hint">在地图上左键添加轨迹顶点，右键完成绘制。绘制完成后可用于轨迹模拟与路径漫游。</div>
+                        <button type="button" id="track-draw-start-btn" class="interp-btn track-draw-btn" onclick="CesiumTrajectory.startDrawTrack()">开始绘制</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumTrajectory.undoDrawPoint()">撤销上一点</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumTrajectory.finishDrawTrack()">完成绘制</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumTrajectory.cancelDrawTrack()">取消绘制</button>
+                    </div>
+
+                    <div id="track-simulate" class="spatial-panel">
+                        <div class="panel-hint">导入坐标系：WGS84（EPSG:4326）。CSV 支持表头识别（经度/lng、纬度/lat、高度、时间）。</div>
+                        <div class="interp-field">
+                            <label>轨迹文件</label>
+                            <input type="file" id="track-file" accept=".csv,.json,.geojson">
+                        </div>
+                        <div class="interp-field">
+                            <label>本地模型 (glTF / GLB)</label>
+                            <input type="file" id="track-model-file" accept=".gltf,.glb" onchange="CesiumTrajectory.onModelFileChange()">
+                        </div>
+                        <div class="panel-hint" id="track-model-file-info">未选择本地模型，可使用 URL 或默认图标。推荐 .glb 单文件。</div>
+                        <div class="interp-field">
+                            <label>模型 URL (可选，与本地二选一)</label>
+                            <input type="text" id="track-model-url" placeholder="https://.../model.glb">
+                        </div>
+                        <div class="interp-field">
+                            <label>模型缩放</label>
+                            <input type="number" id="track-model-scale" placeholder="留空按模式默认" min="0.1" max="100" step="0.1">
+                        </div>
+                        <div class="interp-field"><label>播放倍速</label><input type="number" id="track-speed" value="1" min="0.1" max="10" step="0.1"></div>
+                        <button type="button" class="interp-btn" onclick="CesiumTrajectory.loadTrack()">加载轨迹</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumTrajectory.createDemoTrack()">加载演示轨迹</button>
+                        <button type="button" class="interp-btn" onclick="CesiumTrajectory.startSimulation()">开始模拟</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumTrajectory.pauseSimulation()">暂停/继续</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumTrajectory.stopSimulation()">停止</button>
+                    </div>
+
+                    <div id="track-roam" class="spatial-panel">
+                        <div class="panel-hint">沿已绘制或已加载的轨迹进行相机漫游，支持跟随与鸟瞰视角。</div>
+                        <div class="interp-field">
+                            <label>漫游视角</label>
+                            <select id="track-roam-view">
+                                <option value="follow">跟随视角</option>
+                                <option value="overhead">鸟瞰视角</option>
+                            </select>
+                        </div>
+                        <div class="interp-row">
+                            <div class="interp-field"><label>视角高度(m)</label><input type="number" id="track-roam-height" value="80" min="5" step="5"></div>
+                            <div class="interp-field"><label>漫游倍速</label><input type="number" id="track-roam-speed" value="1" min="0.1" max="10" step="0.1"></div>
+                        </div>
+                        <div class="interp-field">
+                            <label><input type="checkbox" id="track-roam-loop" checked> 循环漫游</label>
+                        </div>
+                        <button type="button" class="interp-btn" onclick="CesiumTrajectory.startPathRoaming()">开始漫游</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumTrajectory.pausePathRoaming()">暂停/继续</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumTrajectory.stopPathRoaming()">停止漫游</button>
+                    </div>
+
+                    <button type="button" class="interp-btn secondary" style="margin-top:8px;" onclick="CesiumTrajectory.clearTrack()">清除轨迹</button>
+                    <div id="track-info"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 左侧工具栏 -->
+    <div id="map-ui-left">
+        <div id="map-ui-toolbar"></div>
+    </div>
+
+    <!-- 右侧：底图 / 可视化 -->
+    <div id="map-ui-right">
+        <div class="map-ui-tabs">
+            <button type="button" class="map-ui-tab active" data-panel="basemap">🌐 底图</button>
+            <button type="button" class="map-ui-tab" data-panel="viz">🗺️ 可视化</button>
+        </div>
+        <div id="map-ui-panel">
+            <div id="ui-panel-basemap" class="ui-panel-content active">
+                <div class="ui-panel-header">
+                    <span>🌐 底图</span>
+                    <button type="button" class="ui-panel-close" id="map-ui-panel-close">×</button>
+                </div>
+                <div id="ui-basemap-grid"></div>
+                <div id="ui-basemap-settings">
+                    <label class="ui-basemap-terrain">
+                        <input type="checkbox" id="basemap-terrain" onchange="CesiumMapUI.toggleTerrain(this.checked)"> 启用地形
+                    </label>
+                    <div class="ui-basemap-style-title">底图属性</div>
+                    <div class="ui-basemap-slider-row">
+                        <label>brightness</label>
+                        <input type="range" id="basemap-brightness" min="0" max="2" step="0.01" value="1"
+                            oninput="CesiumMapUI.onBasemapStyleChange('basemap-brightness-val', this.value); CesiumMapUI.applyBasemapStyle()">
+                        <span class="slider-val" id="basemap-brightness-val">1</span>
+                    </div>
+                    <div class="ui-basemap-slider-row">
+                        <label>contrast</label>
+                        <input type="range" id="basemap-contrast" min="0" max="2" step="0.01" value="1"
+                            oninput="CesiumMapUI.onBasemapStyleChange('basemap-contrast-val', this.value); CesiumMapUI.applyBasemapStyle()">
+                        <span class="slider-val" id="basemap-contrast-val">1</span>
+                    </div>
+                    <div class="ui-basemap-slider-row">
+                        <label>hue</label>
+                        <input type="range" id="basemap-hue" min="-1" max="3" step="0.01" value="0"
+                            oninput="CesiumMapUI.onBasemapStyleChange('basemap-hue-val', this.value); CesiumMapUI.applyBasemapStyle()">
+                        <span class="slider-val" id="basemap-hue-val">0</span>
+                    </div>
+                    <div class="ui-basemap-slider-row">
+                        <label>saturation</label>
+                        <input type="range" id="basemap-saturation" min="0" max="3" step="0.01" value="1"
+                            oninput="CesiumMapUI.onBasemapStyleChange('basemap-saturation-val', this.value); CesiumMapUI.applyBasemapStyle()">
+                        <span class="slider-val" id="basemap-saturation-val">1</span>
+                    </div>
+                    <div class="ui-basemap-slider-row">
+                        <label>gamma</label>
+                        <input type="range" id="basemap-gamma" min="0" max="3" step="0.01" value="1"
+                            oninput="CesiumMapUI.onBasemapStyleChange('basemap-gamma-val', this.value); CesiumMapUI.applyBasemapStyle()">
+                        <span class="slider-val" id="basemap-gamma-val">1</span>
+                    </div>
+                    <div class="ui-basemap-slider-row">
+                        <label>alpha</label>
+                        <input type="range" id="basemap-alpha" min="0" max="1" step="0.01" value="1"
+                            oninput="CesiumMapUI.onBasemapStyleChange('basemap-alpha-val', this.value); CesiumMapUI.applyBasemapStyle()">
+                        <span class="slider-val" id="basemap-alpha-val">1</span>
+                    </div>
+                    <label class="ui-basemap-terrain">
+                        <input type="checkbox" id="basemap-invert-color" onchange="CesiumMapUI.applyBasemapStyle()"> 反向颜色 (invertColor)
+                    </label>
+                    <div class="ui-basemap-color-row">
+                        <label>filterColor</label>
+                        <input type="color" id="basemap-filter-color" value="#ffffff"
+                            oninput="CesiumMapUI.onFilterColorChange(this.value); CesiumMapUI.applyBasemapStyle()">
+                        <span class="slider-val" id="basemap-filter-color-val">#ffffff</span>
+                    </div>
+                </div>
+            </div>
+            <div id="ui-panel-viz" class="ui-panel-content">
+                <div class="ui-panel-header">
+                    <span>🗺️ 可视化</span>
+                    <button type="button" class="ui-panel-close" data-viz-close>×</button>
+                </div>
+                <div class="ui-viz-hint">陕西 3D 可视化：卫星贴图 + 发光侧壁；底部双圈反向旋转；地市/区县边界标注，鼠标悬停高亮。</div>
+                <label class="ui-viz-label">行政区</label>
+                <select id="viz-region-select" onchange="ShaanxiGlobeViz.onRegionSelectChange()"></select>
+                <div class="ui-viz-actions">
+                    <button type="button" class="ui-viz-btn" onclick="ShaanxiGlobeViz.locateActiveRegion()">定位</button>
+                    <button type="button" class="ui-viz-btn secondary" onclick="ShaanxiGlobeViz.resetView()">重置视角</button>
+                    <button type="button" class="ui-viz-btn cancel" onclick="CesiumMapUI.exitVizMode()">退出</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="coord-input-panel">
+        <label style="font-size:12px;color:rgba(255,255,255,0.65);">经度</label>
+        <input type="text" id="lng-input" placeholder="经度">
+        <label style="font-size:12px;color:rgba(255,255,255,0.65);">纬度</label>
+        <input type="text" id="lat-input" placeholder="纬度">
+        <label style="font-size:12px;color:rgba(255,255,255,0.65);">视角高度(m)</label>
+        <input type="text" id="height-input" value="500">
+        <div style="margin-top:8px;">
+            <button onclick="CesiumMeasureTools.locateByCoord()">定位</button>
+            <button style="background:#595959;" onclick="CesiumMeasureTools.hideCoordInput()">关闭</button>
+        </div>
+    </div>
+
+    <div id="pick-result-panel">
+        <div class="result-item"><span class="result-label">经度:</span><span class="result-value" id="wgs84-lng"></span></div>
+        <div class="result-item"><span class="result-label">纬度:</span><span class="result-value" id="wgs84-lat"></span></div>
+        <div class="result-item"><span class="result-label">高程:</span><span class="result-value" id="wgs84-height"></span> m</div>
+        <button onclick="CesiumMeasureTools.copyCoords()">复制</button>
+        <button style="background:#595959;" onclick="CesiumMeasureTools.hidePickResult()">关闭</button>
+    </div>
+
+    <div id="measure-result">
+        <span id="measure-result-text">测量结果</span>
+        <button onclick="CesiumMeasureTools.deactivateTool()">结束</button>
+        <button onclick="CesiumMeasureTools.clearAll()">清除</button>
+    </div>
+
+    <div id="layer-style-modal" class="layer-style-modal" onclick="if(event.target===this)CesiumLayerManager.closeStyleSettings()">
+        <div class="layer-style-dialog">
+            <div class="layer-style-header">
+                <h3 id="layer-style-title">图层样式</h3>
+                <button type="button" class="layer-style-close" onclick="CesiumLayerManager.closeStyleSettings()">×</button>
+            </div>
+            <div class="layer-style-body">
+                <div id="style-section-point">
+                    <div class="style-section-title">点样式</div>
+                    <div class="style-row">
+                        <div class="style-field"><label>颜色</label><input type="color" id="style-point-color" value="#409eff"></div>
+                        <div class="style-field"><label>大小 (px)</label><input type="number" id="style-point-size" value="8" min="1" max="40"></div>
+                    </div>
+                    <div class="style-field"><label>高度 (m)</label><input type="number" id="style-point-height" value="0" step="1"></div>
+                    <div class="style-field">
+                        <label>点图标</label>
+                        <div class="style-icon-row">
+                            <input type="file" id="style-point-icon-file" accept="image/*" onchange="CesiumLayerManager.onPointIconFile(this)">
+                            <img id="style-point-icon-preview" class="style-icon-preview" alt="" style="display:none">
+                            <button type="button" class="style-icon-clear" onclick="CesiumLayerManager.clearPointIcon()">清除</button>
+                        </div>
+                    </div>
+                    <div class="style-field"><label>图标缩放</label><input type="number" id="style-point-icon-scale" value="1" min="0.1" max="5" step="0.1"></div>
+                    <div class="style-field">
+                        <label>标注字段</label>
+                        <select id="style-point-label-field"><option value="">不显示标注</option></select>
+                    </div>
+                    <div class="style-row">
+                        <div class="style-field"><label>标注字号</label><input type="number" id="style-point-label-size" value="14" min="8" max="48"></div>
+                        <div class="style-field"><label>标注颜色</label><input type="color" id="style-point-label-color" value="#303133"></div>
+                    </div>
+                </div>
+                <div id="style-section-line">
+                    <div class="style-section-title">线样式</div>
+                    <div class="style-row">
+                        <div class="style-field"><label>颜色</label><input type="color" id="style-line-color" value="#409eff"></div>
+                        <div class="style-field"><label>线宽 (px)</label><input type="number" id="style-line-width" value="3" min="1" max="20"></div>
+                    </div>
+                    <div class="style-field">
+                        <label>线材质</label>
+                        <select id="style-line-material">
+                            <option value="solid">纯色</option>
+                            <option value="dash">虚线</option>
+                            <option value="glow">发光</option>
+                            <option value="outline">描边</option>
+                            <option value="arrow">箭头</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="style-section-polygon">
+                    <div class="style-section-title">面样式</div>
+                <div class="style-row">
+                    <div class="style-field"><label>填充色</label><input type="color" id="style-polygon-fill" value="#409eff"></div>
+                    <div class="style-field"><label>填充透明度 (%)</label><input type="number" id="style-polygon-fill-opacity" value="35" min="0" max="100"></div>
+                </div>
+                <div class="style-field">
+                    <label>填充材质</label>
+                    <select id="style-polygon-fill-material">
+                        <option value="solid">纯色</option>
+                        <option value="stripe">条纹</option>
+                        <option value="grid">网格</option>
+                        <option value="checkerboard">棋盘</option>
+                    </select>
+                </div>
+                <div class="style-row">
+                    <div class="style-field"><label>边框色</label><input type="color" id="style-polygon-stroke" value="#409eff"></div>
+                    <div class="style-field"><label>边框宽度</label><input type="number" id="style-polygon-stroke-width" value="2" min="0" max="20"></div>
+                </div>
+                <div class="style-row">
+                    <div class="style-field"><label>底面高度 (m)</label><input type="number" id="style-polygon-height" value="0" step="1"></div>
+                    <div class="style-field"><label>拉伸高度 (m)</label><input type="number" id="style-polygon-extrude" value="0" step="1" title="大于底面高度时拉伸为体"></div>
+                </div>
+                <div class="style-field">
+                    <label><input type="checkbox" id="style-clamp-ground" checked> 贴地显示（无拉伸时）</label>
+                </div>
+                </div>
+            </div>
+            <div class="layer-style-footer">
+                <button type="button" class="btn-cancel" onclick="CesiumLayerManager.closeStyleSettings()">取消</button>
+                <button type="button" class="btn-apply" onclick="CesiumLayerManager.applyStyleSettings()">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div id="map-status-bar">
+        <div class="status-scale">
+            <div id="status-scale-bar"></div>
+            <span id="status-scale-label">--</span>
+        </div>
+        <div class="status-info">
+            <span><em>经度</em><strong id="status-lng">--</strong></span>
+            <span><em>纬度</em><strong id="status-lat">--</strong></span>
+            <span><em>海拔</em><strong id="status-alt">--</strong> m</span>
+            <span><em>层级</em><strong id="status-level">--</strong></span>
+            <span><em>方向</em><strong id="status-heading">--</strong></span>
+            <span><em>俯仰角</em><strong id="status-pitch">--</strong></span>
+            <span><em>视高</em><strong id="status-height">--</strong> m</span>
+        </div>
+    </div>
+
+    <script>
+        const TD_KEY = '6620871c00d70bb3350902f4a65bcede';
+        Cesium.Ion.defaultAccessToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiI1NmFkNjc2Ni01OGJlLTRkY2MtODdiOC1kNDQwNjg0MzNmOGQiLCJpZCI6NDU0ODIsImlhdCI6MTcyMjk5MzA5MH0.yaojYc75v2tp38zS0S_98MPHy8M1hQIjxL9yPQcZuJo';
+
+        let viewer = null;
+        let isLayerPanelCollapsed = true;
+        let basemapLayers = [];
+        let ellipsoidTerrainProvider = null;
+        let worldTerrainProvider = null;
+        const TDT_SUBDOMAINS = ['0', '1', '2', '3', '4', '5', '6', '7'];
+        const AMAP_SUBDOMAINS = ['1', '2', '3', '4'];
+
+        function createBasemapProviders(type) {
+            const items = [];
+            if (type === 'tdt_img') {
+                items.push({
+                    provider: new Cesium.UrlTemplateImageryProvider({
+                        url: 'https://t{s}.tianditu.gov.cn/img_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=img&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=' + TD_KEY,
+                        subdomains: TDT_SUBDOMAINS,
+                        tilingScheme: new Cesium.WebMercatorTilingScheme(),
+                        maximumLevel: 18
+                    }),
+                    filterPixels: true
+                });
+                items.push({
+                    provider: new Cesium.UrlTemplateImageryProvider({
+                        url: 'https://t{s}.tianditu.gov.cn/cia_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cia&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=' + TD_KEY,
+                        subdomains: TDT_SUBDOMAINS,
+                        tilingScheme: new Cesium.WebMercatorTilingScheme(),
+                        maximumLevel: 18
+                    }),
+                    filterPixels: false
+                });
+            } else if (type === 'tdt_vec') {
+                items.push({
+                    provider: new Cesium.UrlTemplateImageryProvider({
+                        url: 'https://t{s}.tianditu.gov.cn/vec_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=vec&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=' + TD_KEY,
+                        subdomains: TDT_SUBDOMAINS,
+                        tilingScheme: new Cesium.WebMercatorTilingScheme(),
+                        maximumLevel: 18
+                    }),
+                    filterPixels: true
+                });
+                items.push({
+                    provider: new Cesium.UrlTemplateImageryProvider({
+                        url: 'https://t{s}.tianditu.gov.cn/cva_w/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=cva&STYLE=default&TILEMATRIXSET=w&FORMAT=tiles&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&tk=' + TD_KEY,
+                        subdomains: TDT_SUBDOMAINS,
+                        tilingScheme: new Cesium.WebMercatorTilingScheme(),
+                        maximumLevel: 18
+                    }),
+                    filterPixels: false
+                });
+            } else if (type === 'amap_img') {
+                items.push({
+                    provider: new Cesium.UrlTemplateImageryProvider({
+                        url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
+                        subdomains: AMAP_SUBDOMAINS,
+                        maximumLevel: 18
+                    }),
+                    filterPixels: true
+                });
+                items.push({
+                    provider: new Cesium.UrlTemplateImageryProvider({
+                        url: 'https://webst0{s}.is.autonavi.com/appmaptile?style=8&x={x}&y={y}&z={z}',
+                        subdomains: AMAP_SUBDOMAINS,
+                        maximumLevel: 18
+                    }),
+                    filterPixels: false
+                });
+            } else if (type === 'amap_vec') {
+                items.push({
+                    provider: new Cesium.UrlTemplateImageryProvider({
+                        url: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+                        subdomains: AMAP_SUBDOMAINS,
+                        maximumLevel: 18
+                    }),
+                    filterPixels: false
+                });
+            }
+            return items.map(function (item) {
+                if (item.filterPixels) item.provider._basemapPixelFilter = true;
+                return item.provider;
+            });
+        }
+
+        function installBasemapPixelFilterHook() {
+            if (installBasemapPixelFilterHook._installed) return;
+            installBasemapPixelFilterHook._installed = true;
+            const loadImage = Cesium.ImageryProvider && Cesium.ImageryProvider.loadImage;
+            if (typeof loadImage !== 'function') {
+                console.warn('底图像素滤镜：ImageryProvider.loadImage 不可用');
+                return;
+            }
+            const originalLoadImage = loadImage;
+            Cesium.ImageryProvider.loadImage = function (provider, resource) {
+                const promise = originalLoadImage.call(this, provider, resource);
+                if (!provider || !provider._basemapPixelFilter) return promise;
+                const style = getBasemapStyleSettings();
+                if (!needsBasemapPixelFilter(style)) return promise;
+                return Promise.resolve(promise).then(function (image) {
+                    if (!image) return image;
+                    return processBasemapTileImage(image, style);
+                });
+            };
+        }
+
+        function parseFilterColorRgb(hex) {
+            try {
+                const c = Cesium.Color.fromCssColorString(hex || '#ffffff');
+                return { r: c.red, g: c.green, b: c.blue };
+            } catch (e) {
+                return { r: 1, g: 1, b: 1 };
+            }
+        }
+
+        function needsBasemapPixelFilter(style) {
+            if (style.invertColor) return true;
+            const fc = parseFilterColorRgb(style.filterColor);
+            return fc.r !== 1 || fc.g !== 1 || fc.b !== 1;
+        }
+
+        function ensureDrawableImage(image) {
+            return new Promise(function (resolve) {
+                if (!image) {
+                    resolve(null);
+                    return;
+                }
+                if (image instanceof HTMLImageElement && (!image.complete || image.naturalWidth === 0)) {
+                    image.onload = function () { resolve(image); };
+                    image.onerror = function () { resolve(null); };
+                    return;
+                }
+                resolve(image);
+            });
+        }
+
+        function processBasemapTileImage(image, style) {
+            if (!needsBasemapPixelFilter(style)) return Promise.resolve(image);
+            return ensureDrawableImage(image).then(function (drawable) {
+                if (!drawable) return image;
+                const fc = parseFilterColorRgb(style.filterColor);
+                const canvas = document.createElement('canvas');
+                canvas.width = drawable.width;
+                canvas.height = drawable.height;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                try {
+                    ctx.drawImage(drawable, 0, 0, canvas.width, canvas.height);
+                    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imgData.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                        let r = data[i] / 255;
+                        let g = data[i + 1] / 255;
+                        let b = data[i + 2] / 255;
+                        if (style.invertColor) {
+                            r = 1 - r;
+                            g = 1 - g;
+                            b = 1 - b;
+                        }
+                        r *= fc.r;
+                        g *= fc.g;
+                        b *= fc.b;
+                        data[i] = Math.round(Cesium.Math.clamp(r, 0, 1) * 255);
+                        data[i + 1] = Math.round(Cesium.Math.clamp(g, 0, 1) * 255);
+                        data[i + 2] = Math.round(Cesium.Math.clamp(b, 0, 1) * 255);
+                    }
+                    ctx.putImageData(imgData, 0, 0);
+                    return canvas;
+                } catch (err) {
+                    console.warn('底图像素滤镜失败，请通过 http 服务访问页面以避免跨域限制', err);
+                    return drawable;
+                }
+            });
+        }
+
+        function applyStyleToLayer(layer, style) {
+            const filterColor = Cesium.Color.fromCssColorString(style.filterColor || '#ffffff');
+            layer.brightness = style.brightness;
+            layer.contrast = style.contrast;
+            layer.hue = style.hue;
+            layer.saturation = style.saturation;
+            layer.gamma = style.gamma;
+            layer.alpha = style.alpha;
+            layer.invertColor = style.invertColor;
+            layer.filterColor = filterColor;
+        }
+
+        let basemapPixelFilterKey = '';
+
+        function reloadBasemapTiles(type, style) {
+            if (!viewer || !type || type === 'none') return;
+            style = style || getBasemapStyleSettings();
+            clearBasemapLayers();
+            const providers = createBasemapProviders(type);
+            providers.forEach(function (provider, index) {
+                const layer = viewer.imageryLayers.addImageryProvider(provider, index);
+                applyStyleToLayer(layer, style);
+                basemapLayers.push(layer);
+            });
+            if (type !== 'none') viewer.scene.globe.baseColor = Cesium.Color.BLACK;
+            viewer.scene.requestRender();
+        }
+
+        function getBasemapStyleSettings() {
+            function val(id, fallback) {
+                const el = document.getElementById(id);
+                const n = el ? parseFloat(el.value) : NaN;
+                return isNaN(n) ? fallback : n;
+            }
+            const invertEl = document.getElementById('basemap-invert-color');
+            const filterEl = document.getElementById('basemap-filter-color');
+            return {
+                brightness: val('basemap-brightness', 1),
+                contrast: val('basemap-contrast', 1),
+                hue: val('basemap-hue', 0),
+                saturation: val('basemap-saturation', 1),
+                gamma: val('basemap-gamma', 1),
+                alpha: val('basemap-alpha', 1),
+                invertColor: !!(invertEl && invertEl.checked),
+                filterColor: filterEl ? filterEl.value : '#ffffff'
+            };
+        }
+
+        function applyBasemapLayerStyle(type) {
+            if (!viewer) return;
+            const style = getBasemapStyleSettings();
+            const filterKey = (style.invertColor ? '1' : '0') + ':' + style.filterColor;
+            const filterChanged = basemapPixelFilterKey !== '' && filterKey !== basemapPixelFilterKey;
+            basemapPixelFilterKey = filterKey;
+
+            if (filterChanged) {
+                reloadBasemapTiles(type, style);
+            } else {
+                basemapLayers.forEach(function (layer) {
+                    applyStyleToLayer(layer, style);
+                });
+            }
+
+            if (type !== 'none') {
+                viewer.scene.globe.baseColor = Cesium.Color.BLACK;
+            }
+            viewer.scene.requestRender();
+        }
+
+        async function setBasemapTerrain(enabled) {
+            if (!viewer) return;
+            if (!ellipsoidTerrainProvider) {
+                ellipsoidTerrainProvider = new Cesium.EllipsoidTerrainProvider();
+            }
+            if (!enabled) {
+                viewer.terrainProvider = ellipsoidTerrainProvider;
+                return;
+            }
+            try {
+                if (!worldTerrainProvider) {
+                    worldTerrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1);
+                }
+                viewer.terrainProvider = worldTerrainProvider;
+            } catch (e) {
+                console.warn('全球地形加载失败', e);
+                const cb = document.getElementById('basemap-terrain');
+                if (cb) cb.checked = false;
+                viewer.terrainProvider = ellipsoidTerrainProvider;
+            }
+        }
+
+        function clearBasemapLayers() {
+            basemapLayers.forEach(function (layer) {
+                viewer.imageryLayers.remove(layer, false);
+            });
+            basemapLayers = [];
+        }
+
+        function applyBasemap(type) {
+            clearBasemapLayers();
+            basemapPixelFilterKey = '';
+            const providers = createBasemapProviders(type);
+            providers.forEach(function (provider, index) {
+                const layer = viewer.imageryLayers.addImageryProvider(provider, index);
+                basemapLayers.push(layer);
+            });
+            applyBasemapLayerStyle(type);
+        }
+
+        function switchBasemap(type) {
+            if (!viewer) return;
+            applyBasemap(type);
+        }
+
+        async function initViewer() {
+            ellipsoidTerrainProvider = new Cesium.EllipsoidTerrainProvider();
+            viewer = new Cesium.Viewer('cesiumContainer', {
+                animation: true,
+                timeline: true,
+                baseLayerPicker: false,
+                geocoder: false,
+                homeButton: true,
+                sceneModePicker: true,
+                navigationHelpButton: false,
+                fullscreenButton: true,
+                infoBox: true,
+                selectionIndicator: true,
+                imageryProvider: false,
+                terrainProvider: ellipsoidTerrainProvider,
+                contextOptions: {
+                    webgl: { alpha: true }
+                }
+            });
+
+            viewer.scene.globe.depthTestAgainstTerrain = true;
+            viewer.scene.fxaa = true;
+
+//          try {
+//              viewer.terrainProvider = await Cesium.CesiumTerrainProvider.fromIonAssetId(1);
+//          } catch (e) {
+//              console.warn('全球地形加载失败，使用椭球地形', e);
+//          }
+
+            installBasemapPixelFilterHook();
+            applyBasemap('tdt_img');
+
+            await ShaanxiGlobeViz.init(viewer);
+            ShaanxiGlobeViz.setHomeView();
+
+            CesiumLayerManager.init(viewer, 'layer-list');
+            CesiumLayerManager.updateImageryForm('xyz');
+            CesiumLayerManager.switchImportType('geojson');
+            CesiumMeasureTools.init(viewer);
+            CesiumSpatialAnalysis.init(viewer);
+            CesiumTrajectory.init(viewer);
+            CesiumMapUI.init(viewer);
+
+            if (new URLSearchParams(location.search).get('viz') === '1') {
+                setTimeout(function () { CesiumMapUI.switchTab('viz'); }, 250);
+            }
+        }
+
+        let currentLeftTab = 'layers';
+
+        function toggleLayerPanel() {
+            const panel = document.getElementById('layer-panel');
+            const toggleBtn = document.getElementById('toggle-layer-panel');
+            isLayerPanelCollapsed = !isLayerPanelCollapsed;
+            if (isLayerPanelCollapsed) {
+                panel.classList.add('collapsed');
+                toggleBtn.innerHTML = '›';
+                document.body.classList.remove('layer-panel-open');
+            } else {
+                panel.classList.remove('collapsed');
+                toggleBtn.innerHTML = '‹';
+                document.body.classList.add('layer-panel-open');
+            }
+            if (ShaanxiGlobeViz.isVizMode()) {
+                setTimeout(function () { ShaanxiGlobeViz.fitRegionInView(); }, 380);
+            }
+        }
+
+        function switchLeftPanelTab(tab) {
+            if (currentLeftTab === 'track' && tab !== 'track' && typeof CesiumTrajectory !== 'undefined') {
+                CesiumTrajectory.onPanelDeactivate();
+            }
+            currentLeftTab = tab;
+            document.querySelectorAll('.left-panel-tab').forEach(function (btn) {
+                btn.classList.toggle('active', btn.dataset.ltab === tab);
+            });
+            document.querySelectorAll('.left-tab-panel').forEach(function (panel) {
+                panel.classList.toggle('active', panel.id === 'left-tab-' + tab);
+            });
+        }
+
+        function switchTrackPanel(id, btn) {
+            document.querySelectorAll('#left-tab-track .spatial-sub-tab').forEach(function (b) { b.classList.remove('active'); });
+            document.querySelectorAll('#left-tab-track .spatial-panel').forEach(function (p) { p.classList.remove('active'); });
+            btn.classList.add('active');
+            document.getElementById('track-' + id).classList.add('active');
+            if (id !== 'draw' && typeof CesiumTrajectory !== 'undefined') {
+                CesiumTrajectory.onPanelDeactivate();
+            }
+        }
+
+        function switchSpatialPanel(id, btn) {
+            document.querySelectorAll('.spatial-sub-tab').forEach(function (b) { b.classList.remove('active'); });
+            document.querySelectorAll('.spatial-panel').forEach(function (p) { p.classList.remove('active'); });
+            btn.classList.add('active');
+            document.getElementById('spatial-' + id).classList.add('active');
+        }
+
+        async function submitLayer(tab) {
+            try {
+                await CesiumLayerManager.handleSubmit(tab, TD_KEY);
+                alert('图层添加成功');
+            } catch (e) {
+                alert('添加失败: ' + e.message);
+            }
+        }
+
+        function toggleTerrainShadows(checked) {
+            viewer.shadows = checked;
+            viewer.terrainShadows = checked ? Cesium.ShadowMode.ENABLED : Cesium.ShadowMode.DISABLED;
+        }
+
+        function toggleDepthTest(checked) {
+            viewer.scene.globe.depthTestAgainstTerrain = checked;
+        }
+
+        function toggleFxaa(checked) {
+            viewer.scene.fxaa = checked;
+        }
+
+        initViewer();
+    </script>
+</body>
+</html>
