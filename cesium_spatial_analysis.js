@@ -11,8 +11,15 @@ const CesiumSpatialAnalysis = (function () {
     let floodEntity = null;
     let floodTimer = null;
     let heatmapPrimitive = null;
+    let heatmapImageryLayer = null;
 
-    const COLOR_RAMP = ['#313695', '#4575b4', '#74add1', '#abd9e9', '#fee090', '#fdae61', '#f46d43', '#d73027'];
+    const HEAT_COLOR_STOPS = [
+        { t: 0.0, r: 0, g: 0, b: 255 },
+        { t: 0.25, r: 0, g: 255, b: 255 },
+        { t: 0.5, r: 0, g: 255, b: 0 },
+        { t: 0.75, r: 255, g: 255, b: 0 },
+        { t: 1.0, r: 255, g: 0, b: 0 }
+    ];
 
     function init(viewerInstance) {
         viewer = viewerInstance;
@@ -29,10 +36,7 @@ const CesiumSpatialAnalysis = (function () {
             if (e instanceof Cesium.Entity) viewer.entities.remove(e);
         });
         analysisEntities = [];
-        if (heatmapPrimitive) {
-            viewer.scene.primitives.remove(heatmapPrimitive);
-            heatmapPrimitive = null;
-        }
+        clearHeatmap();
         if (floodEntity) { viewer.entities.remove(floodEntity); floodEntity = null; }
         const legend = document.getElementById('spatial-legend');
         if (legend) legend.innerHTML = '';
@@ -193,156 +197,504 @@ const CesiumSpatialAnalysis = (function () {
         if (floodTimer) { clearInterval(floodTimer); floodTimer = null; }
     }
 
+    function clearHeatmap() {
+        if (heatmapPrimitive) {
+            viewer.scene.primitives.remove(heatmapPrimitive);
+            heatmapPrimitive = null;
+        }
+        if (heatmapImageryLayer) {
+            viewer.imageryLayers.remove(heatmapImageryLayer, true);
+            heatmapImageryLayer = null;
+        }
+    }
+
+    function getHeatmapRenderOptions() {
+        return {
+            gridCols: parseInt(document.getElementById('heatmap-cols').value, 10) || 80,
+            radius: parseFloat(document.getElementById('heatmap-radius').value) || 18,
+            blur: parseInt(document.getElementById('heatmap-blur').value, 10) || 4,
+            maxHeight: parseFloat(document.getElementById('heatmap-height').value) || 800,
+            padding: 0.12
+        };
+    }
+
+    function expandBounds(minLng, maxLng, minLat, maxLat, ratio) {
+        const padLng = Math.max((maxLng - minLng) * ratio, 0.001);
+        const padLat = Math.max((maxLat - minLat) * ratio, 0.001);
+        return {
+            minLng: minLng - padLng,
+            maxLng: maxLng + padLng,
+            minLat: minLat - padLat,
+            maxLat: maxLat + padLat
+        };
+    }
+
+    function computeHeatGrid(points, cols, rows, minLng, maxLng, minLat, maxLat, radiusCells) {
+        const grid = new Float32Array(cols * rows);
+        const cellLng = (maxLng - minLng) / cols;
+        const cellLat = (maxLat - minLat) / rows;
+        const sigma = Math.max(radiusCells / 3, 0.5);
+        const sigma2 = sigma * sigma;
+        const influence = Math.ceil(radiusCells * 3);
+
+        points.forEach(function (p) {
+            const cx = (p.lng - minLng) / cellLng;
+            const cy = (p.lat - minLat) / cellLat;
+            const i0 = Math.max(0, Math.floor(cx - influence));
+            const i1 = Math.min(cols - 1, Math.ceil(cx + influence));
+            const j0 = Math.max(0, Math.floor(cy - influence));
+            const j1 = Math.min(rows - 1, Math.ceil(cy + influence));
+            for (let j = j0; j <= j1; j++) {
+                for (let i = i0; i <= i1; i++) {
+                    const dx = i + 0.5 - cx;
+                    const dy = j + 0.5 - cy;
+                    const d2 = dx * dx + dy * dy;
+                    const w = Math.exp(-d2 / (2 * sigma2));
+                    grid[j * cols + i] += p.value * w;
+                }
+            }
+        });
+
+        let max = 0;
+        for (let k = 0; k < grid.length; k++) max = Math.max(max, grid[k]);
+        if (max > 0) {
+            for (let k = 0; k < grid.length; k++) grid[k] /= max;
+        }
+        return grid;
+    }
+
+    function blurGrid(src, cols, rows, radius) {
+        const tmp = new Float32Array(cols * rows);
+        const dst = new Float32Array(cols * rows);
+        const kernelSize = radius * 2 + 1;
+        const kernel = new Float32Array(kernelSize);
+        let kSum = 0;
+        for (let i = -radius; i <= radius; i++) {
+            const w = Math.exp(-(i * i) / (2 * (radius / 2 + 0.5) * (radius / 2 + 0.5)));
+            kernel[i + radius] = w;
+            kSum += w;
+        }
+        for (let i = 0; i < kernelSize; i++) kernel[i] /= kSum;
+
+        for (let j = 0; j < rows; j++) {
+            for (let i = 0; i < cols; i++) {
+                let sum = 0;
+                for (let k = -radius; k <= radius; k++) {
+                    const ii = Math.min(cols - 1, Math.max(0, i + k));
+                    sum += src[j * cols + ii] * kernel[k + radius];
+                }
+                tmp[j * cols + i] = sum;
+            }
+        }
+        for (let j = 0; j < rows; j++) {
+            for (let i = 0; i < cols; i++) {
+                let sum = 0;
+                for (let k = -radius; k <= radius; k++) {
+                    const jj = Math.min(rows - 1, Math.max(0, j + k));
+                    sum += tmp[jj * cols + i] * kernel[k + radius];
+                }
+                dst[j * cols + i] = sum;
+            }
+        }
+        let max = 0;
+        for (let n = 0; n < dst.length; n++) max = Math.max(max, dst[n]);
+        if (max > 0) {
+            for (let n = 0; n < dst.length; n++) dst[n] /= max;
+        }
+        return dst;
+    }
+
+    function heatColorAt(t) {
+        t = Cesium.Math.clamp(t, 0, 1);
+        for (let i = 0; i < HEAT_COLOR_STOPS.length - 1; i++) {
+            const a = HEAT_COLOR_STOPS[i];
+            const b = HEAT_COLOR_STOPS[i + 1];
+            if (t >= a.t && t <= b.t) {
+                const f = (t - a.t) / (b.t - a.t || 1);
+                return {
+                    r: Math.round(a.r + (b.r - a.r) * f),
+                    g: Math.round(a.g + (b.g - a.g) * f),
+                    b: Math.round(a.b + (b.b - a.b) * f)
+                };
+            }
+        }
+        const last = HEAT_COLOR_STOPS[HEAT_COLOR_STOPS.length - 1];
+        return { r: last.r, g: last.g, b: last.b };
+    }
+
+    function gridToHeatCanvas(grid, cols, rows, minAlpha) {
+        minAlpha = minAlpha == null ? 0.04 : minAlpha;
+        const canvas = document.createElement('canvas');
+        canvas.width = cols;
+        canvas.height = rows;
+        const ctx = canvas.getContext('2d');
+        const img = ctx.createImageData(cols, rows);
+        const data = img.data;
+        for (let j = 0; j < rows; j++) {
+            for (let i = 0; i < cols; i++) {
+                const v = grid[j * cols + i];
+                const dstJ = rows - 1 - j;
+                const idx = (dstJ * cols + i) * 4;
+                if (v < minAlpha) {
+                    data[idx] = data[idx + 1] = data[idx + 2] = data[idx + 3] = 0;
+                } else {
+                    const c = heatColorAt(v);
+                    data[idx] = c.r;
+                    data[idx + 1] = c.g;
+                    data[idx + 2] = c.b;
+                    data[idx + 3] = Math.round(Cesium.Math.lerp(0, 220, v));
+                }
+            }
+        }
+        ctx.putImageData(img, 0, 0);
+        return canvas;
+    }
+
+    function sampleGridBilinear(grid, cols, rows, u, v) {
+        u = Cesium.Math.clamp(u, 0, 1);
+        v = Cesium.Math.clamp(v, 0, 1);
+        const x = u * (cols - 1);
+        const y = v * (rows - 1);
+        const x0 = Math.floor(x);
+        const y0 = Math.floor(y);
+        const x1 = Math.min(cols - 1, x0 + 1);
+        const y1 = Math.min(rows - 1, y0 + 1);
+        const fx = x - x0;
+        const fy = y - y0;
+        const v00 = grid[y0 * cols + x0];
+        const v10 = grid[y0 * cols + x1];
+        const v01 = grid[y1 * cols + x0];
+        const v11 = grid[y1 * cols + x1];
+        return (1 - fx) * (1 - fy) * v00 + fx * (1 - fy) * v10 + (1 - fx) * fy * v01 + fx * fy * v11;
+    }
+
+    function buildHeatGridFromPoints(points, opts) {
+        const lngs = points.map(function (p) { return p.lng; });
+        const lats = points.map(function (p) { return p.lat; });
+        const bounds = expandBounds(
+            Math.min.apply(null, lngs), Math.max.apply(null, lngs),
+            Math.min.apply(null, lats), Math.max.apply(null, lats),
+            opts.padding
+        );
+        const rows = Math.max(10, Math.ceil(opts.gridCols * (bounds.maxLat - bounds.minLat) / (bounds.maxLng - bounds.minLng || 0.01)));
+        let grid = computeHeatGrid(points, opts.gridCols, rows, bounds.minLng, bounds.maxLng, bounds.minLat, bounds.maxLat, opts.radius);
+        for (let p = 0; p < opts.blur; p++) {
+            grid = blurGrid(grid, opts.gridCols, rows, 2);
+        }
+        return { grid: grid, cols: opts.gridCols, rows: rows, bounds: bounds };
+    }
+
     async function runHeatmap(mode) {
         const fileInput = document.getElementById('heatmap-file');
         if (!fileInput.files || !fileInput.files[0]) { alert('请上传热力数据 CSV/JSON'); return; }
         const fieldName = document.getElementById('heatmap-field').value.trim() || 'value';
-        const gridCols = parseInt(document.getElementById('heatmap-cols').value, 10) || 40;
+        const opts = getHeatmapRenderOptions();
         const text = await fileInput.files[0].text();
-        const points = parseHeatPoints(text, fieldName);
-        if (points.length < 3) { alert('至少需要 3 个有效点'); return; }
+        let points;
+        try {
+            points = parseHeatPoints(text, fieldName);
+        } catch (e) {
+            alert(e.message || '热力数据解析失败');
+            return;
+        }
+        if (points.length < 3) {
+            alert('至少需要 3 个有效点。支持 CSV、GeoJSON（FeatureCollection/Feature/Point）、JSON 数组或 {"data":[{lng,lat,value}]}');
+            return;
+        }
 
-        const lngs = points.map(function (p) { return p.lng; });
-        const lats = points.map(function (p) { return p.lat; });
-        const minLng = Math.min.apply(null, lngs), maxLng = Math.max.apply(null, lngs);
-        const minLat = Math.min.apply(null, lats), maxLat = Math.max.apply(null, lats);
         const minVal = Math.min.apply(null, points.map(function (p) { return p.value; }));
         const maxVal = Math.max.apply(null, points.map(function (p) { return p.value; }));
-        const rows = Math.ceil(gridCols * (maxLat - minLat) / (maxLng - minLng || 1));
+        const pack = buildHeatGridFromPoints(points, opts);
 
-        if (heatmapPrimitive) viewer.scene.primitives.remove(heatmapPrimitive);
+        clearHeatmap();
 
         if (mode === 'planar') {
-            await renderPlanarHeatmap(points, minLng, maxLng, minLat, maxLat, gridCols, rows, minVal, maxVal);
+            renderPlanarHeatmap(pack);
         } else {
-            await renderSurfaceHeatmap(points, minLng, maxLng, minLat, maxLat, gridCols, rows, minVal, maxVal);
+            await renderSurfaceHeatmap(pack, opts.maxHeight);
         }
         renderLegend(minVal, maxVal);
-        document.getElementById('spatial-result').textContent = '热力图已生成 (' + (mode === 'planar' ? '平面' : '曲面贴地') + ')，共 ' + points.length + ' 个采样点';
+        document.getElementById('spatial-result').textContent =
+            '热力图已生成 (' + (mode === 'planar' ? '平面叠加' : '立体曲面') + ')，共 ' + points.length + ' 个采样点';
     }
 
-    function parseHeatPoints(text, fieldName) {
-        const points = [];
-        try {
-            const json = JSON.parse(text);
-            const features = json.features || (Array.isArray(json) ? json.map(function (p) { return { properties: p, geometry: { type: 'Point', coordinates: [p.lng || p.lon || p.x, p.lat || p.y] } }; }) : []);
-            features.forEach(function (f) {
-                const props = f.properties || f;
-                const g = f.geometry;
-                let lng, lat, val;
-                if (g && g.type === 'Point') { lng = g.coordinates[0]; lat = g.coordinates[1]; }
-                else { lng = props.lng || props.lon || props.x; lat = props.lat || props.y; }
-                val = parseFloat(props[fieldName] || props.value);
-                if (!isNaN(lng) && !isNaN(lat) && !isNaN(val)) points.push({ lng: lng, lat: lat, value: val });
-            });
-        } catch (e) {
-            const lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
-            const header = lines[0].split(/[,，\t]/);
-            const lngIdx = header.findIndex(function (h) { return /lng|lon|经度|x/i.test(h); });
-            const latIdx = header.findIndex(function (h) { return /lat|纬度|y/i.test(h); });
-            const valIdx = header.findIndex(function (h) { return h.toLowerCase() === fieldName.toLowerCase() || /value|值/i.test(h); });
-            for (let i = 1; i < lines.length; i++) {
-                const cols = lines[i].split(/[,，\t]/);
-                const lng = parseFloat(cols[lngIdx >= 0 ? lngIdx : 0]);
-                const lat = parseFloat(cols[latIdx >= 0 ? latIdx : 1]);
-                const val = parseFloat(cols[valIdx >= 0 ? valIdx : 2]);
-                if (!isNaN(lng) && !isNaN(lat) && !isNaN(val)) points.push({ lng: lng, lat: lat, value: val });
+    function isJsonLikeText(text) {
+        const trimmed = (text || '').trim();
+        return trimmed.startsWith('{') || trimmed.startsWith('[');
+    }
+
+    function detectHeatDataFormat(data) {
+        if (!data || typeof data !== 'object') return 'unknown';
+        if (data.type === 'FeatureCollection' || data.type === 'Feature') return 'geojson';
+        if (data.type && data.coordinates) return 'geojson';
+        if (Array.isArray(data)) return 'json';
+        const wrapKeys = ['data', 'records', 'list', 'items', 'rows', 'result', 'stations', 'points'];
+        for (let i = 0; i < wrapKeys.length; i++) {
+            if (Array.isArray(data[wrapKeys[i]])) return 'json';
+        }
+        return 'unknown';
+    }
+
+    function extractHeatValue(props, fieldName) {
+        if (!props || typeof props !== 'object') return NaN;
+        const keys = [fieldName, 'value', 'val', '值', 'count', 'weight', 'intensity'];
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            if (!key) continue;
+            if (props[key] !== undefined && props[key] !== null && props[key] !== '') {
+                const v = parseFloat(props[key]);
+                if (!isNaN(v)) return v;
             }
+            const lower = String(key).toLowerCase();
+            const matched = Object.keys(props).find(function (k) { return k.toLowerCase() === lower; });
+            if (matched != null && props[matched] !== undefined && props[matched] !== null && props[matched] !== '') {
+                const v = parseFloat(props[matched]);
+                if (!isNaN(v)) return v;
+            }
+        }
+        return NaN;
+    }
+
+    function featuresToHeatPoints(features, fieldName) {
+        const points = [];
+        (features || []).forEach(function (f) {
+            if (!f) return;
+            const props = f.properties || {};
+            const g = f.geometry;
+            let lng, lat;
+            if (g && g.type === 'Point' && g.coordinates && g.coordinates.length >= 2) {
+                lng = parseFloat(g.coordinates[0]);
+                lat = parseFloat(g.coordinates[1]);
+            } else {
+                lng = parseFloat(props.lng ?? props.lon ?? props.longitude ?? props.x ?? props['经度']);
+                lat = parseFloat(props.lat ?? props.latitude ?? props.y ?? props['纬度']);
+            }
+            const val = extractHeatValue(props, fieldName);
+            if (!isNaN(lng) && !isNaN(lat) && !isNaN(val)) {
+                points.push({ lng: lng, lat: lat, value: val });
+            }
+        });
+        return points;
+    }
+
+    function parseHeatPointsFromJsonData(data, fieldName) {
+        const format = detectHeatDataFormat(data);
+        if (typeof CoordFileConverter !== 'undefined' && CoordFileConverter.normalizeToFeatureCollection) {
+            let fc;
+            try {
+                fc = CoordFileConverter.normalizeToFeatureCollection(data);
+            } catch (e) {
+                throw new Error((format === 'geojson' ? 'GeoJSON' : 'JSON') + ' 解析失败：' + e.message);
+            }
+            const points = featuresToHeatPoints(fc.features, fieldName);
+            if (!points.length) {
+                throw new Error(
+                    (format === 'geojson' ? 'GeoJSON' : 'JSON') +
+                    ' 中未找到有效热力点。请确认含 Point 坐标及数值字段「' + fieldName + '」'
+                );
+            }
+            return points;
+        }
+
+        if (format === 'geojson') {
+            const features = data.type === 'FeatureCollection' ? data.features
+                : (data.type === 'Feature' ? [data] : []);
+            const points = featuresToHeatPoints(features, fieldName);
+            if (!points.length) throw new Error('GeoJSON 中未找到有效 Point 要素或数值字段「' + fieldName + '」');
+            return points;
+        }
+
+        const list = Array.isArray(data) ? data : null;
+        if (!list) throw new Error('无法识别的 JSON 结构，需为坐标数组或 {"data":[...]} 格式');
+        const pseudoFeatures = list.map(function (item) {
+            return {
+                properties: item,
+                geometry: {
+                    type: 'Point',
+                    coordinates: [
+                        item.lng ?? item.lon ?? item.longitude ?? item.x,
+                        item.lat ?? item.latitude ?? item.y
+                    ]
+                }
+            };
+        });
+        const points = featuresToHeatPoints(pseudoFeatures, fieldName);
+        if (!points.length) throw new Error('JSON 数组中未找到有效经纬度或数值字段「' + fieldName + '」');
+        return points;
+    }
+
+    function parseHeatPointsFromCsv(text, fieldName) {
+        const points = [];
+        const lines = text.split(/\r?\n/).filter(function (l) { return l.trim(); });
+        if (lines.length < 2) return points;
+        const header = lines[0].split(/[,，\t]/).map(function (h) { return h.trim(); });
+        const lngIdx = header.findIndex(function (h) { return /^(lng|lon|longitude|x|经度)$/i.test(h); });
+        const latIdx = header.findIndex(function (h) { return /^(lat|latitude|y|纬度)$/i.test(h); });
+        const valIdx = header.findIndex(function (h) {
+            return h.toLowerCase() === fieldName.toLowerCase() || /^(value|val|值|count|weight)$/i.test(h);
+        });
+        for (let i = 1; i < lines.length; i++) {
+            const cols = lines[i].split(/[,，\t]/);
+            const lng = parseFloat(cols[lngIdx >= 0 ? lngIdx : 0]);
+            const lat = parseFloat(cols[latIdx >= 0 ? latIdx : 1]);
+            const val = parseFloat(cols[valIdx >= 0 ? valIdx : 2]);
+            if (!isNaN(lng) && !isNaN(lat) && !isNaN(val)) points.push({ lng: lng, lat: lat, value: val });
         }
         return points;
     }
 
-    function idw(x, y, points, power) {
-        power = power || 2;
-        let num = 0, den = 0;
-        points.forEach(function (p) {
-            const d = Math.sqrt(Math.pow(p.lng - x, 2) + Math.pow(p.lat - y, 2));
-            if (d < 1e-10) return p.value;
-            const w = 1 / Math.pow(d, power);
-            num += w * p.value;
-            den += w;
-        });
-        return den > 0 ? num / den : 0;
-    }
+    function parseHeatPoints(text, fieldName) {
+        const trimmed = (text || '').trim();
+        if (!trimmed) return [];
 
-    function valueToColor(val, minVal, maxVal) {
-        const t = maxVal > minVal ? (val - minVal) / (maxVal - minVal) : 0.5;
-        const idx = Math.min(COLOR_RAMP.length - 1, Math.floor(t * (COLOR_RAMP.length - 1)));
-        return Cesium.Color.fromCssColorString(COLOR_RAMP[idx]).withAlpha(0.65);
-    }
-
-    async function renderPlanarHeatmap(points, minLng, maxLng, minLat, maxLat, cols, rows, minVal, maxVal) {
-        const instances = [];
-        for (let i = 0; i < cols; i++) {
-            for (let j = 0; j < rows; j++) {
-                const lng0 = minLng + (maxLng - minLng) * i / cols;
-                const lat0 = minLat + (maxLat - minLat) * j / rows;
-                const lng1 = minLng + (maxLng - minLng) * (i + 1) / cols;
-                const lat1 = minLat + (maxLat - minLat) * (j + 1) / rows;
-                const cx = (lng0 + lng1) / 2, cy = (lat0 + lat1) / 2;
-                const val = idw(cx, cy, points);
-                const color = valueToColor(val, minVal, maxVal);
-                instances.push(new Cesium.GeometryInstance({
-                    geometry: new Cesium.RectangleGeometry({
-                        rectangle: Cesium.Rectangle.fromDegrees(lng0, lat0, lng1, lat1),
-                        height: 100
-                    }),
-                    attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(color) }
-                }));
+        if (isJsonLikeText(trimmed)) {
+            let data;
+            try {
+                data = JSON.parse(trimmed);
+            } catch (e) {
+                throw new Error('JSON 语法错误：' + e.message);
             }
-        }
-        heatmapPrimitive = viewer.scene.primitives.add(new Cesium.Primitive({
-            geometryInstances: instances,
-            appearance: new Cesium.PerInstanceColorAppearance({ flat: true, translucent: true })
-        }));
-        viewer.camera.flyTo({ destination: Cesium.Rectangle.fromDegrees(minLng, minLat, maxLng, maxLat) });
-    }
-
-    async function renderSurfaceHeatmap(points, minLng, maxLng, minLat, maxLat, cols, rows, minVal, maxVal) {
-        const cells = [];
-        for (let i = 0; i < cols; i++) {
-            for (let j = 0; j < rows; j++) {
-                const lng0 = minLng + (maxLng - minLng) * i / cols;
-                const lat0 = minLat + (maxLat - minLat) * j / rows;
-                const lng1 = minLng + (maxLng - minLng) * (i + 1) / cols;
-                const lat1 = minLat + (maxLat - minLat) * (j + 1) / rows;
-                const cx = (lng0 + lng1) / 2, cy = (lat0 + lat1) / 2;
-                cells.push({ lng0: lng0, lat0: lat0, lng1: lng1, lat1: lat1, val: idw(cx, cy, points) });
-            }
+            return parseHeatPointsFromJsonData(data, fieldName);
         }
 
-        const cartographics = cells.map(function (c) {
-            return Cesium.Cartographic.fromDegrees((c.lng0 + c.lng1) / 2, (c.lat0 + c.lat1) / 2);
+        return parseHeatPointsFromCsv(trimmed, fieldName);
+    }
+
+    function upscaleCanvas(srcCanvas, targetWidth) {
+        const scale = targetWidth / srcCanvas.width;
+        const targetHeight = Math.max(1, Math.round(srcCanvas.height * scale));
+        const out = document.createElement('canvas');
+        out.width = targetWidth;
+        out.height = targetHeight;
+        const ctx = out.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(srcCanvas, 0, 0, targetWidth, targetHeight);
+        return out;
+    }
+
+    function renderPlanarHeatmap(pack) {
+        const b = pack.bounds;
+        const small = gridToHeatCanvas(pack.grid, pack.cols, pack.rows, 0.03);
+        const canvas = upscaleCanvas(small, Math.max(512, pack.cols));
+        const provider = new Cesium.SingleTileImageryProvider({
+            url: canvas.toDataURL('image/png'),
+            rectangle: Cesium.Rectangle.fromDegrees(b.minLng, b.minLat, b.maxLng, b.maxLat),
+            tileWidth: pack.cols,
+            tileHeight: pack.rows
         });
-        let sampled = cartographics;
+        heatmapImageryLayer = viewer.imageryLayers.addImageryProvider(provider);
+        heatmapImageryLayer.alpha = 0.92;
+        viewer.camera.flyTo({ destination: Cesium.Rectangle.fromDegrees(b.minLng, b.minLat, b.maxLng, b.maxLat) });
+    }
+
+    async function renderSurfaceHeatmap(pack, maxHeight) {
+        const b = pack.bounds;
+        const cols = pack.cols;
+        const rows = pack.rows;
+        const meshCols = Math.min(cols, 120);
+        const meshRows = Math.min(rows, 120);
+        const heatCanvas = upscaleCanvas(gridToHeatCanvas(pack.grid, cols, rows, 0.02), Math.max(512, cols));
+
+        const cartographics = [];
+        for (let j = 0; j <= meshRows; j++) {
+            for (let i = 0; i <= meshCols; i++) {
+                const lng = b.minLng + (b.maxLng - b.minLng) * i / meshCols;
+                const lat = b.minLat + (b.maxLat - b.minLat) * j / meshRows;
+                cartographics.push(Cesium.Cartographic.fromDegrees(lng, lat));
+            }
+        }
+
+        let terrainHeights = cartographics.map(function (c) { return 0; });
         try {
-            sampled = await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, cartographics);
-        } catch (e) { /* 无地形时使用默认高度 */ }
+            const sampled = await Cesium.sampleTerrainMostDetailed(viewer.terrainProvider, cartographics);
+            terrainHeights = sampled.map(function (s) { return s.height || 0; });
+        } catch (e) { /* 无地形时使用椭球高度 0 */ }
 
-        cells.forEach(function (cell, idx) {
-            const h = (sampled[idx] && sampled[idx].height != null ? sampled[idx].height : 0) + 1;
-            const color = valueToColor(cell.val, minVal, maxVal);
-            const entity = viewer.entities.add({
-                polygon: {
-                    hierarchy: Cesium.Cartesian3.fromDegreesArray([
-                        cell.lng0, cell.lat0, cell.lng1, cell.lat0, cell.lng1, cell.lat1, cell.lng0, cell.lat1
-                    ]),
-                    material: color,
-                    height: h,
-                    outline: false
-                }
-            });
-            analysisEntities.push(entity);
+        const vertexCount = (meshCols + 1) * (meshRows + 1);
+        const positions = new Float64Array(vertexCount * 3);
+        const sts = new Float32Array(vertexCount * 2);
+        const indices = [];
+
+        for (let j = 0; j <= meshRows; j++) {
+            for (let i = 0; i <= meshCols; i++) {
+                const vi = j * (meshCols + 1) + i;
+                const u = i / meshCols;
+                const v = j / meshRows;
+                const lng = b.minLng + (b.maxLng - b.minLng) * u;
+                const lat = b.minLat + (b.maxLat - b.minLat) * v;
+                const intensity = sampleGridBilinear(pack.grid, cols, rows, u, v);
+                const h = terrainHeights[vi] + intensity * maxHeight;
+                const cart = Cesium.Cartesian3.fromDegrees(lng, lat, h);
+                positions[vi * 3] = cart.x;
+                positions[vi * 3 + 1] = cart.y;
+                positions[vi * 3 + 2] = cart.z;
+                sts[vi * 2] = u;
+                sts[vi * 2 + 1] = v;
+            }
+        }
+
+        for (let j = 0; j < meshRows; j++) {
+            for (let i = 0; i < meshCols; i++) {
+                const a = j * (meshCols + 1) + i;
+                const bIdx = a + 1;
+                const c = a + (meshCols + 1);
+                const d = c + 1;
+                indices.push(a, bIdx, c, bIdx, d, c);
+            }
+        }
+
+        const geometry = new Cesium.Geometry({
+            attributes: {
+                position: new Cesium.GeometryAttribute({
+                    componentDatatype: Cesium.ComponentDatatype.DOUBLE,
+                    componentsPerAttribute: 3,
+                    values: positions
+                }),
+                st: new Cesium.GeometryAttribute({
+                    componentDatatype: Cesium.ComponentDatatype.FLOAT,
+                    componentsPerAttribute: 2,
+                    values: sts
+                })
+            },
+            indices: new Uint16Array(indices),
+            primitiveType: Cesium.PrimitiveType.TRIANGLES,
+            boundingSphere: Cesium.BoundingSphere.fromVertices(positions)
         });
-        viewer.camera.flyTo({ destination: Cesium.Rectangle.fromDegrees(minLng, minLat, maxLng, maxLat) });
+
+        heatmapPrimitive = viewer.scene.primitives.add(new Cesium.Primitive({
+            geometryInstances: new Cesium.GeometryInstance({ geometry: geometry }),
+            appearance: new Cesium.MaterialAppearance({
+                material: Cesium.Material.fromType('Image', {
+                    image: heatCanvas,
+                    transparent: true
+                }),
+                faceForward: true,
+                translucent: true,
+                flat: false,
+                closed: false
+            }),
+            asynchronous: false
+        }));
+
+        viewer.camera.flyTo({
+            destination: Cesium.Rectangle.fromDegrees(b.minLng, b.minLat, b.maxLng, b.maxLat),
+            duration: 1.5,
+            orientation: {
+                pitch: Cesium.Math.toRadians(-50),
+                heading: 0,
+                roll: 0
+            }
+        });
     }
 
     function renderLegend(minVal, maxVal) {
         const el = document.getElementById('spatial-legend');
         if (!el) return;
-        el.innerHTML = COLOR_RAMP.map(function (c, i) {
-            const v = minVal + (maxVal - minVal) * i / (COLOR_RAMP.length - 1);
-            return '<div class="interp-legend-item"><span class="interp-legend-color" style="background:' + c + '"></span><span>' + v.toFixed(1) + '</span></div>';
+        el.innerHTML = HEAT_COLOR_STOPS.map(function (stop) {
+            const v = minVal + (maxVal - minVal) * stop.t;
+            const css = 'rgb(' + stop.r + ',' + stop.g + ',' + stop.b + ')';
+            return '<div class="interp-legend-item"><span class="interp-legend-color" style="background:' + css + '"></span><span>' + v.toFixed(1) + '</span></div>';
         }).join('');
     }
 

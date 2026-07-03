@@ -11,8 +11,9 @@
     <script src="coord_file_converter.js"></script>
     <script src="cesium_layer_manager.js?v=20250618g"></script>
     <script src="cesium_measure_tools.js"></script>
-    <script src="cesium_spatial_analysis.js"></script>
+    <script src="cesium_spatial_analysis.js?v=20250619c"></script>
     <script src="cesium_trajectory.js?v=20250618b"></script>
+    <script src="cesium_scene_effects.js?v=20250625f"></script>
     <script src="shaanxi_globe_viz.js?v=20250618h"></script>
     <script src="cesium_map_ui.js?v=20250618c"></script>
     <style>
@@ -484,6 +485,51 @@
         }
         .cesium-viewer-bottom, .cesium-viewer-toolbar,
         .cesium-viewer-fullscreenContainer { display: none !important; }
+
+        #imagery-swipe-handle {
+            position: absolute; top: 0; bottom: 0; width: 4px; margin-left: -2px;
+            left: 50%; z-index: 900; cursor: ew-resize; display: none;
+            background: linear-gradient(180deg, rgba(64,158,255,0.2), rgba(64,158,255,0.95), rgba(64,158,255,0.2));
+            box-shadow: 0 0 12px rgba(64,158,255,0.6);
+        }
+        #imagery-swipe-handle::after {
+            content: '‖'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 28px; height: 28px; line-height: 28px; text-align: center;
+            background: rgba(12,22,40,0.85); color: #69c0ff; border-radius: 50%;
+            border: 1px solid rgba(64,158,255,0.5); font-size: 14px;
+        }
+        #imagery-swipe-handle.active { display: block; }
+
+        .multi-compare-wrap {
+            position: absolute; inset: 0; z-index: 50; display: none;
+            background: #0a1018;
+        }
+        .multi-compare-wrap.active { display: grid; gap: 2px; }
+        .multi-compare-wrap.layout-2 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr; }
+        .multi-compare-wrap.layout-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+        .multi-compare-panel { position: relative; min-height: 0; min-width: 0; background: #111; overflow: hidden; }
+        .multi-compare-inner {
+            position: absolute; inset: 0; width: 100%; height: 100%;
+        }
+        .multi-compare-inner .cesium-viewer,
+        .multi-compare-inner .cesium-widget,
+        .multi-compare-inner .cesium-widget-cesiumWidgetContainer {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        .multi-compare-label {
+            position: absolute; top: 8px; left: 8px; z-index: 2; padding: 4px 10px;
+            background: rgba(12,22,40,0.82); color: #69c0ff; font-size: 11px;
+            border-radius: 4px; border: 1px solid rgba(64,158,255,0.35); pointer-events: none;
+        }
+        body.multi-compare-active #cesiumContainer .cesium-viewer {
+            visibility: hidden;
+            pointer-events: none;
+        }
+        body.multi-compare-active #multi-compare-wrap .cesium-viewer {
+            visibility: visible !important;
+            pointer-events: auto !important;
+        }
     </style>
 </head>
 <body>
@@ -491,6 +537,8 @@
         <div id="viz-scene-bg"></div>
         <div id="viz-layer-popup"></div>
         <div id="layer-map-popup"></div>
+        <div id="imagery-swipe-handle"></div>
+        <div id="multi-compare-wrap" class="multi-compare-wrap"></div>
     </div>
 
     <div id="toggle-layer-panel" onclick="toggleLayerPanel()">›</div>
@@ -646,6 +694,9 @@
                         <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('heatmap', this)">热力图</button>
                         <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('slope', this)">坡度坡向</button>
                         <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('scene', this)">场景分析</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('weather', this)">天气</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('swipe', this)">卷帘</button>
+                        <button type="button" class="spatial-sub-tab" onclick="switchSpatialPanel('multiscreen', this)">多屏</button>
                     </div>
 
                     <div id="spatial-cutfill" class="spatial-panel active">
@@ -669,12 +720,19 @@
                     <div id="spatial-heatmap" class="spatial-panel">
                         <div class="interp-field">
                             <label>数据文件 (CSV / JSON / GeoJSON)</label>
-                            <input type="file" id="heatmap-file" accept=".csv,.json,.geojson">
+                            <input type="file" id="heatmap-file" accept=".csv,.json,.geojson,.txt">
+                        </div>
+                        <div class="interp-hint" style="font-size:11px;color:rgba(255,255,255,0.55);margin:0 0 10px;line-height:1.5;">
+                            GeoJSON：<code>FeatureCollection</code> / <code>Feature</code>（Point 要素）<br>
+                            JSON：<code>[{lng,lat,value}]</code> 或 <code>{"data":[...]}</code>（字段支持 lng/lon/经度、lat/纬度、value/值）
                         </div>
                         <div class="interp-field"><label>数值字段</label><input type="text" id="heatmap-field" value="value"></div>
-                        <div class="interp-field"><label>格网列数</label><input type="number" id="heatmap-cols" value="40" min="10" max="100"></div>
+                        <div class="interp-field"><label>格网列数</label><input type="number" id="heatmap-cols" value="80" min="20" max="200"></div>
+                        <div class="interp-field"><label>热力半径</label><input type="number" id="heatmap-radius" value="18" min="5" max="60" step="1"></div>
+                        <div class="interp-field"><label>模糊次数</label><input type="number" id="heatmap-blur" value="4" min="0" max="10" step="1"></div>
+                        <div class="interp-field"><label>立体高度(m)</label><input type="number" id="heatmap-height" value="800" min="50" max="5000" step="50"></div>
                         <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runHeatmap('planar')">平面热力图</button>
-                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runHeatmap('surface')">曲面贴地热力图</button>
+                        <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runHeatmap('surface')">立体曲面热力图</button>
                     </div>
 
                     <div id="spatial-slope" class="spatial-panel">
@@ -692,7 +750,90 @@
                         <button type="button" class="interp-btn" onclick="CesiumSpatialAnalysis.runShadowAnalysis()">阴影分析</button>
                     </div>
 
-                    <button type="button" class="interp-btn secondary" onclick="CesiumSpatialAnalysis.clearAll()">清除分析结果</button>
+                    <div id="spatial-weather" class="spatial-panel">
+                        <div class="panel-hint">基于 globe/wheale 着色器：雨天 RainShader+闪电、雪天 SnowShader、雾天 FogShader</div>
+                        <div class="interp-field">
+                            <label>天气</label>
+                            <select id="scene-weather-select" onchange="CesiumSceneEffects.onWeatherSelectChange()">
+                                <option value="sunny">晴天</option>
+                                <option value="rainy">雨天（闪电）</option>
+                                <option value="foggy">雾天</option>
+                                <option value="snowy">雪天</option>
+                            </select>
+                        </div>
+                        <button type="button" class="interp-btn" onclick="CesiumSceneEffects.setWeather(document.getElementById('scene-weather-select').value)">应用天气</button>
+                    </div>
+
+                    <div id="spatial-swipe" class="spatial-panel">
+                        <div class="panel-hint">左右卷帘对比不同底图，拖动地图中线切换</div>
+                        <div class="interp-field">
+                            <label>左侧图层</label>
+                            <select id="swipe-left-basemap">
+                                <option value="tdt_img">天地图影像</option>
+                                <option value="tdt_vec">天地图矢量</option>
+                                <option value="amap_img">高德影像</option>
+                                <option value="amap_vec">高德矢量</option>
+                            </select>
+                        </div>
+                        <div class="interp-field">
+                            <label>右侧图层</label>
+                            <select id="swipe-right-basemap">
+                                <option value="tdt_vec">天地图矢量</option>
+                                <option value="tdt_img">天地图影像</option>
+                                <option value="amap_img">高德影像</option>
+                                <option value="amap_vec">高德矢量</option>
+                            </select>
+                        </div>
+                        <button type="button" class="interp-btn" onclick="CesiumSceneEffects.startSwipe()">开启卷帘对比</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumSceneEffects.stopSwipe()">关闭卷帘</button>
+                    </div>
+
+                    <div id="spatial-multiscreen" class="spatial-panel">
+                        <div class="panel-hint">各屏地图联动：在任意分屏上平移、缩放、旋转，其他分屏与主视图同步跟随</div>
+                        <div class="interp-field">
+                            <label>布局</label>
+                            <select id="multi-layout-select">
+                                <option value="2">双屏（左右）</option>
+                                <option value="4">四屏</option>
+                            </select>
+                        </div>
+                        <div class="interp-field"><label>屏 1 底图</label>
+                            <select id="multi-basemap-1">
+                                <option value="tdt_img">天地图影像</option>
+                                <option value="tdt_vec">天地图矢量</option>
+                                <option value="amap_img">高德影像</option>
+                                <option value="amap_vec">高德矢量</option>
+                            </select>
+                        </div>
+                        <div class="interp-field"><label>屏 2 底图</label>
+                            <select id="multi-basemap-2">
+                                <option value="tdt_vec">天地图矢量</option>
+                                <option value="tdt_img">天地图影像</option>
+                                <option value="amap_img">高德影像</option>
+                                <option value="amap_vec">高德矢量</option>
+                            </select>
+                        </div>
+                        <div class="interp-field"><label>屏 3 底图</label>
+                            <select id="multi-basemap-3">
+                                <option value="amap_img">高德影像</option>
+                                <option value="tdt_img">天地图影像</option>
+                                <option value="tdt_vec">天地图矢量</option>
+                                <option value="amap_vec">高德矢量</option>
+                            </select>
+                        </div>
+                        <div class="interp-field"><label>屏 4 底图</label>
+                            <select id="multi-basemap-4">
+                                <option value="amap_vec">高德矢量</option>
+                                <option value="tdt_img">天地图影像</option>
+                                <option value="tdt_vec">天地图矢量</option>
+                                <option value="amap_img">高德影像</option>
+                            </select>
+                        </div>
+                        <button type="button" class="interp-btn" onclick="CesiumSceneEffects.startMultiCompare()">开启多屏对比</button>
+                        <button type="button" class="interp-btn secondary" onclick="CesiumSceneEffects.stopMultiCompare()">关闭多屏</button>
+                    </div>
+
+                    <button type="button" class="interp-btn secondary" onclick="CesiumSpatialAnalysis.clearAll(); CesiumSceneEffects.clearSceneEffects();">清除分析结果</button>
                     <div id="spatial-result"></div>
                     <div class="interp-legend" id="spatial-legend"></div>
                 </div>
@@ -1319,6 +1460,15 @@
             CesiumLayerManager.switchImportType('geojson');
             CesiumMeasureTools.init(viewer);
             CesiumSpatialAnalysis.init(viewer);
+            CesiumSceneEffects.init(viewer, {
+                getBasemapProviders: createBasemapProviders,
+                setMainBasemapVisible: function (visible) {
+                    basemapLayers.forEach(function (layer) {
+                        layer.show = visible;
+                        layer.splitDirection = Cesium.SplitDirection.NONE;
+                    });
+                }
+            });
             CesiumTrajectory.init(viewer);
             CesiumMapUI.init(viewer);
 
@@ -1371,8 +1521,8 @@
         }
 
         function switchSpatialPanel(id, btn) {
-            document.querySelectorAll('.spatial-sub-tab').forEach(function (b) { b.classList.remove('active'); });
-            document.querySelectorAll('.spatial-panel').forEach(function (p) { p.classList.remove('active'); });
+            document.querySelectorAll('#left-tab-spatial .spatial-sub-tab').forEach(function (b) { b.classList.remove('active'); });
+            document.querySelectorAll('#left-tab-spatial .spatial-panel').forEach(function (p) { p.classList.remove('active'); });
             btn.classList.add('active');
             document.getElementById('spatial-' + id).classList.add('active');
         }
