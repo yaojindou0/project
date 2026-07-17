@@ -9,7 +9,7 @@
     <script src="turf.min.js"></script>
     <script src="wellknown.js"></script>
     <script src="coord_file_converter.js"></script>
-    <script src="cesium_layer_manager.js?v=20250618g"></script>
+    <script src="cesium_layer_manager.js?v=20250717b"></script>
     <script src="cesium_measure_tools.js"></script>
     <script src="cesium_spatial_analysis.js?v=20250619c"></script>
     <script src="cesium_trajectory.js?v=20250618b"></script>
@@ -232,6 +232,10 @@
         .layer-opacity-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; padding-left: 22px; }
         .layer-opacity-label { font-size: 11px; color: #909399; width: 36px; }
         .layer-opacity-slider { flex: 1; accent-color: #409eff; }
+        .layer-height-input {
+            flex: 1; padding: 4px 8px; border: 1px solid #dcdfe6; border-radius: 4px;
+            font-size: 12px; box-sizing: border-box; min-width: 0;
+        }
         .layer-opacity-value { font-size: 11px; color: #606266; width: 34px; text-align: right; }
         .interp-field { margin-bottom: 10px; }
         .interp-field label { display: block; font-size: 12px; color: #606266; margin-bottom: 5px; font-weight: 500; }
@@ -577,6 +581,10 @@
                             <label>图层名称</label>
                             <input type="text" id="layer-3dtiles-name" placeholder="可选">
                         </div>
+                        <div class="layer-field">
+                            <label>高度偏移 (m)</label>
+                            <input type="number" id="layer-3dtiles-height" value="0" step="0.1" placeholder="0">
+                        </div>
                         <button type="button" class="layer-btn" onclick="submitLayer('3dtiles')">添加 3D Tiles</button>
                     </div>
 
@@ -660,10 +668,11 @@
                             <button type="button" class="import-type-btn" data-import="kml" onclick="CesiumLayerManager.switchImportType('kml')">KML/KMZ</button>
                             <button type="button" class="import-type-btn" data-import="czml" onclick="CesiumLayerManager.switchImportType('czml')">CZML</button>
                             <button type="button" class="import-type-btn" data-import="gltf" onclick="CesiumLayerManager.switchImportType('gltf')">glTF本地</button>
+                            <button type="button" class="import-type-btn" data-import="3dtiles" onclick="CesiumLayerManager.switchImportType('3dtiles')">3D Tiles本地</button>
                         </div>
-                        <div class="panel-hint">坐标均为 WGS84（EPSG:4326）</div>
+                        <div class="panel-hint" id="layer-import-hint">坐标均为 WGS84（EPSG:4326）</div>
                         <div class="layer-field" id="layer-import-file-box">
-                            <label>选择文件</label>
+                            <label id="layer-import-file-label">选择文件</label>
                             <input type="file" id="layer-import-file" accept=".geojson,.json,.csv,.txt,.wkt,.kml,.kmz,.czml,.gltf,.glb">
                         </div>
                         <div class="layer-field" id="layer-import-text-box">
@@ -674,13 +683,17 @@
                             <div class="layer-field"><label>经度</label><input type="text" id="layer-gltf-lng" value="116.39"></div>
                             <div class="layer-field"><label>纬度</label><input type="text" id="layer-gltf-lat" value="39.9"></div>
                         </div>
+                        <div class="layer-field" id="layer-3dtiles-import-height" style="display:none;">
+                            <label>高度偏移 (m)</label>
+                            <input type="number" id="layer-import-3dtiles-height" value="0" step="0.1">
+                        </div>
                         <div class="layer-field"><label>图层名称</label><input type="text" id="layer-import-name" placeholder="可选"></div>
                         <button type="button" class="layer-btn" onclick="submitLayer('import')">导入图层</button>
                     </div>
                 </div>
                 <div class="left-section layer-list-wrap">
                     <div class="layer-list-title">图层列表</div>
-                    <div class="panel-hint" style="margin-bottom:6px;">矢量/模型/3D Tiles 图层显示「定位」；导入矢量显示「设置」</div>
+                    <div class="panel-hint" style="margin-bottom:6px;">矢量/模型/3D Tiles 图层显示「定位」；3D Tiles 可在列表中调整高度；导入矢量显示「设置」</div>
                     <div id="layer-list"></div>
                 </div>
             </div>

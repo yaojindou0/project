@@ -182,6 +182,149 @@ const CesiumLayerManager = (function () {
         return !!(obj && obj.root && obj.boundingSphere && typeof obj.show === 'boolean');
     }
 
+    function captureTilesetBaseGeo(tileset) {
+        const center = tileset.boundingSphere.center;
+        const carto = Cesium.Cartographic.fromCartesian(center);
+        return { longitude: carto.longitude, latitude: carto.latitude };
+    }
+
+    function applyTilesetHeight(tileset, baseGeo, heightOffset) {
+        if (!tileset || !baseGeo) return;
+        heightOffset = parseFloat(heightOffset) || 0;
+        const surface = Cesium.Cartesian3.fromRadians(baseGeo.longitude, baseGeo.latitude, 0.0);
+        const offset = Cesium.Cartesian3.fromRadians(baseGeo.longitude, baseGeo.latitude, heightOffset);
+        const translation = Cesium.Cartesian3.subtract(offset, surface, new Cesium.Cartesian3());
+        tileset.modelMatrix = Cesium.Matrix4.fromTranslation(translation);
+    }
+
+    function canAdjustTilesetHeight(entry) {
+        return !!(entry && entry.type === '3DTiles' && isTilesetLike(entry.obj));
+    }
+
+    function normalizeLocalPath(path) {
+        return String(path || '').replace(/\\/g, '/').replace(/^\/+/, '');
+    }
+
+    function localPathDir(path) {
+        path = normalizeLocalPath(path);
+        const idx = path.lastIndexOf('/');
+        return idx >= 0 ? path.substring(0, idx) : '';
+    }
+
+    function resolveLocalPath(baseDir, relativeUrl) {
+        const combined = baseDir ? baseDir + '/' + relativeUrl : relativeUrl;
+        const parts = combined.split('/');
+        const out = [];
+        parts.forEach(function (part) {
+            if (!part || part === '.') return;
+            if (part === '..') out.pop();
+            else out.push(part);
+        });
+        return out.join('/');
+    }
+
+    function lookupLocalPath(pathMap, path) {
+        path = normalizeLocalPath(path);
+        if (pathMap[path]) return pathMap[path];
+        const lower = path.toLowerCase();
+        let key;
+        for (key in pathMap) {
+            if (key.toLowerCase() === lower) return pathMap[key];
+        }
+        for (key in pathMap) {
+            if (key.endsWith('/' + path) || key === path) return pathMap[key];
+        }
+        return null;
+    }
+
+    function findLocalTilesetPath(files) {
+        let tilesetPath = null;
+        let tilesetDepth = Infinity;
+        files.forEach(function (file) {
+            const path = normalizeLocalPath(file.webkitRelativePath || file.name);
+            if (!/tileset\.json$/i.test(path)) return;
+            const depth = path.split('/').length;
+            if (depth < tilesetDepth) {
+                tilesetPath = path;
+                tilesetDepth = depth;
+            }
+        });
+        return tilesetPath;
+    }
+
+    function rewriteTilesetNodeUris(node, currentDir, pathToBlob) {
+        if (!node) return;
+        if (node.content) {
+            if (node.content.uri) {
+                const absPath = resolveLocalPath(currentDir, node.content.uri);
+                const blobUrl = lookupLocalPath(pathToBlob, absPath);
+                if (blobUrl) node.content.uri = blobUrl;
+            }
+            if (node.content.url) {
+                const absPath = resolveLocalPath(currentDir, node.content.url);
+                const blobUrl = lookupLocalPath(pathToBlob, absPath);
+                if (blobUrl) node.content.url = blobUrl;
+            }
+        }
+        if (node.children && node.children.length) {
+            node.children.forEach(function (child) {
+                rewriteTilesetNodeUris(child, currentDir, pathToBlob);
+            });
+        }
+    }
+
+    async function prepareLocalTilesetFiles(files) {
+        files = Array.from(files || []);
+        if (!files.length) throw new Error('请选择本地 3D Tiles 文件夹');
+
+        const pathToBlob = {};
+        const blobUrls = [];
+        files.forEach(function (file) {
+            const path = normalizeLocalPath(file.webkitRelativePath || file.name);
+            const blobUrl = URL.createObjectURL(file);
+            pathToBlob[path] = blobUrl;
+            blobUrls.push(blobUrl);
+        });
+
+        const rootPath = findLocalTilesetPath(files);
+        if (!rootPath) throw new Error('未找到 tileset.json，请选择包含该文件的完整文件夹');
+
+        const jsonFiles = files.filter(function (file) {
+            return /\.json$/i.test(file.name);
+        }).sort(function (a, b) {
+            const pa = normalizeLocalPath(a.webkitRelativePath || a.name);
+            const pb = normalizeLocalPath(b.webkitRelativePath || b.name);
+            return pb.split('/').length - pa.split('/').length;
+        });
+
+        for (let i = 0; i < jsonFiles.length; i++) {
+            const file = jsonFiles[i];
+            const path = normalizeLocalPath(file.webkitRelativePath || file.name);
+            let json;
+            try {
+                json = JSON.parse(await file.text());
+            } catch (err) {
+                continue;
+            }
+            if (!json || !json.root) continue;
+
+            rewriteTilesetNodeUris(json.root, localPathDir(path), pathToBlob);
+            const rewrittenBlob = URL.createObjectURL(new Blob([JSON.stringify(json)], { type: 'application/json' }));
+            if (pathToBlob[path]) URL.revokeObjectURL(pathToBlob[path]);
+            pathToBlob[path] = rewrittenBlob;
+            blobUrls.push(rewrittenBlob);
+        }
+
+        const tilesetUrl = pathToBlob[rootPath];
+        if (!tilesetUrl) throw new Error('无法解析本地 tileset.json');
+
+        return {
+            tilesetUrl: tilesetUrl,
+            blobUrls: blobUrls,
+            displayName: rootPath.split('/').pop() || '本地 3D Tiles'
+        };
+    }
+
     function isEntityLike(obj) {
         try {
             if (obj && Cesium.Entity && obj instanceof Cesium.Entity) return true;
@@ -439,6 +582,8 @@ const CesiumLayerManager = (function () {
             const downDisabled = idx <= 0 ? ' disabled' : '';
             const showLocate = canLocateEntry(e);
             const showStyle = canStyleEntry(e);
+            const showHeight = canAdjustTilesetHeight(e);
+            const heightVal = e.extra && e.extra.heightOffset != null ? e.extra.heightOffset : 0;
             return '<div class="layer-item">' +
                 '<div class="layer-item-head">' +
                 '<label class="layer-item-main">' +
@@ -457,7 +602,13 @@ const CesiumLayerManager = (function () {
                 '<span class="layer-opacity-label">透明度</span>' +
                 '<input type="range" class="layer-opacity-slider" min="0" max="100" value="' + opacityPct +
                 '" oninput="CesiumLayerManager.setOpacity(' + e.id + ', this.value)">' +
-                '<span class="layer-opacity-value">' + opacityPct + '%</span></div></div>';
+                '<span class="layer-opacity-value">' + opacityPct + '%</span></div>' +
+                (showHeight ? '<div class="layer-opacity-row">' +
+                '<span class="layer-opacity-label">高度</span>' +
+                '<input type="number" class="layer-height-input" step="0.1" value="' + heightVal +
+                '" onchange="CesiumLayerManager.setTilesetHeight(' + e.id + ', this.value)" title="高度偏移(m)">' +
+                '<span class="layer-opacity-value">m</span></div>' : '') +
+                '</div>';
         }).join('');
     }
 
@@ -504,6 +655,16 @@ const CesiumLayerManager = (function () {
         renderList();
     }
 
+    function setTilesetHeight(id, height) {
+        const e = findEntry(id);
+        if (!canAdjustTilesetHeight(e)) return;
+        if (!e.extra) e.extra = {};
+        if (!e.extra.baseGeo) e.extra.baseGeo = captureTilesetBaseGeo(e.obj);
+        e.extra.heightOffset = parseFloat(height) || 0;
+        applyTilesetHeight(e.obj, e.extra.baseGeo, e.extra.heightOffset);
+        renderList();
+    }
+
     function moveLayer(id, dir) {
         const idx = managedLayers.findIndex(function (e) { return e.id === id; });
         if (idx < 0) return;
@@ -533,6 +694,11 @@ const CesiumLayerManager = (function () {
         else if (isDataSourceLike(o)) viewer.dataSources.remove(o);
         else if (isImageryLayerLike(o)) viewer.imageryLayers.remove(o);
         else if (o && o.collection) viewer.scene.primitives.remove(o.collection);
+        if (e.extra && e.extra.blobUrls) {
+            e.extra.blobUrls.forEach(function (url) {
+                try { URL.revokeObjectURL(url); } catch (err) { /* ignore */ }
+            });
+        }
         managedLayers.splice(idx, 1);
         renderList();
     }
@@ -905,24 +1071,47 @@ const CesiumLayerManager = (function () {
         const fileBox = document.getElementById('layer-import-file-box');
         const textBox = document.getElementById('layer-import-text-box');
         const gltfPos = document.getElementById('layer-gltf-pos');
+        const tilesHeight = document.getElementById('layer-3dtiles-import-height');
+        const fileLabel = document.getElementById('layer-import-file-label');
+        const importHint = document.getElementById('layer-import-hint');
         const fileInput = document.getElementById('layer-import-file');
         const needsFile = type === 'geojson' || type === 'kml' || type === 'czml' || type === 'gltf' ||
-            type === 'csv' || type === 'json';
+            type === 'csv' || type === 'json' || type === '3dtiles';
         const needsText = type === 'wkt' || type === 'json' || type === 'geojson' || type === 'csv';
         if (fileBox) fileBox.style.display = needsFile ? 'block' : 'none';
         if (textBox) textBox.style.display = needsText ? 'block' : 'none';
         if (gltfPos) gltfPos.style.display = type === 'gltf' ? 'flex' : 'none';
+        if (tilesHeight) tilesHeight.style.display = type === '3dtiles' ? 'block' : 'none';
+        if (importHint) {
+            importHint.textContent = type === '3dtiles'
+                ? '选择包含 tileset.json 及 b3dm/pnts 等瓦片文件的本地文件夹（需通过 http 服务打开页面）'
+                : '坐标均为 WGS84（EPSG:4326）';
+        }
+        if (fileLabel) {
+            fileLabel.textContent = type === '3dtiles' ? '选择文件夹' : '选择文件';
+        }
         if (fileInput) {
-            const accepts = {
-                geojson: '.geojson,.json',
-                json: '.json,.geojson',
-                csv: '.csv,.txt',
-                kml: '.kml,.kmz',
-                czml: '.czml',
-                gltf: '.gltf,.glb',
-                wkt: '.wkt,.txt'
-            };
-            fileInput.accept = accepts[type] || '.geojson,.json,.csv,.txt,.wkt';
+            fileInput.value = '';
+            if (type === '3dtiles') {
+                fileInput.setAttribute('webkitdirectory', '');
+                fileInput.setAttribute('directory', '');
+                fileInput.setAttribute('multiple', '');
+                fileInput.removeAttribute('accept');
+            } else {
+                fileInput.removeAttribute('webkitdirectory');
+                fileInput.removeAttribute('directory');
+                fileInput.removeAttribute('multiple');
+                const accepts = {
+                    geojson: '.geojson,.json',
+                    json: '.json,.geojson',
+                    csv: '.csv,.txt',
+                    kml: '.kml,.kmz',
+                    czml: '.czml',
+                    gltf: '.gltf,.glb',
+                    wkt: '.wkt,.txt'
+                };
+                fileInput.accept = accepts[type] || '.geojson,.json,.csv,.txt,.wkt';
+            }
         }
         const textEl = document.getElementById('layer-import-text');
         if (textEl) {
@@ -932,12 +1121,28 @@ const CesiumLayerManager = (function () {
         }
     }
 
-    async function add3DTiles(url, name) {
+    async function add3DTiles(url, name, heightOffset, extraOpts) {
         if (!url) throw new Error('请输入 3D Tiles URL');
         const tileset = await Cesium.Cesium3DTileset.fromUrl(url);
         viewer.scene.primitives.add(tileset);
+        if (tileset.readyPromise) await tileset.readyPromise;
+        heightOffset = parseFloat(heightOffset) || 0;
+        const baseGeo = captureTilesetBaseGeo(tileset);
+        if (heightOffset !== 0) applyTilesetHeight(tileset, baseGeo, heightOffset);
         try { await zoomToLayerTarget(tileset); } catch (e) { /* ignore */ }
-        return addEntry(name || '3D Tiles', '3DTiles', tileset);
+        const extra = Object.assign({
+            heightOffset: heightOffset,
+            baseGeo: baseGeo
+        }, extraOpts || {});
+        return addEntry(name || '3D Tiles', '3DTiles', tileset, extra);
+    }
+
+    async function addLocal3DTiles(fileList, name, heightOffset) {
+        const prepared = await prepareLocalTilesetFiles(fileList);
+        return add3DTiles(prepared.tilesetUrl, name || prepared.displayName, heightOffset, {
+            blobUrls: prepared.blobUrls,
+            isLocal: true
+        });
     }
 
     async function addModel(url, lng, lat, height, scale, name) {
@@ -1155,8 +1360,15 @@ const CesiumLayerManager = (function () {
         const fileInput = document.getElementById('layer-import-file');
         const textInput = document.getElementById('layer-import-text');
         const file = fileInput && fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+        const files = fileInput && fileInput.files ? fileInput.files : null;
         const text = textInput ? textInput.value : '';
 
+        if (type === '3dtiles') {
+            if (!files || !files.length) throw new Error('请选择本地 3D Tiles 文件夹');
+            const heightEl = document.getElementById('layer-import-3dtiles-height');
+            const heightOffset = heightEl ? heightEl.value : 0;
+            return addLocal3DTiles(files, name, heightOffset);
+        }
         if (type === 'kml') {
             if (!file) throw new Error('请选择 KML/KMZ 文件');
             const ds = await Cesium.KmlDataSource.load(file, {
@@ -1196,7 +1408,8 @@ const CesiumLayerManager = (function () {
         if (tab === '3dtiles') {
             await add3DTiles(
                 document.getElementById('layer-3dtiles-url').value.trim(),
-                document.getElementById('layer-3dtiles-name').value.trim()
+                document.getElementById('layer-3dtiles-name').value.trim(),
+                document.getElementById('layer-3dtiles-height').value
             );
         } else if (tab === 'model') {
             await addModel(
@@ -1405,6 +1618,7 @@ const CesiumLayerManager = (function () {
         toggleVisible: toggleVisible,
         setVisible: setVisible,
         setOpacity: setOpacity,
+        setTilesetHeight: setTilesetHeight,
         moveLayer: moveLayer,
         removeLayer: removeLayer,
         locateLayer: locateLayer,
@@ -1415,6 +1629,7 @@ const CesiumLayerManager = (function () {
         clearPointIcon: clearPointIcon,
         getDefaultCustomImageryCode: getDefaultCustomImageryCode,
         add3DTiles: add3DTiles,
+        addLocal3DTiles: addLocal3DTiles,
         addModel: addModel,
         zeroPad: zeroPad,
         getViewer: function () { return viewer; },
