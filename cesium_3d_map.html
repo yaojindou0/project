@@ -1437,14 +1437,14 @@
             ellipsoidTerrainProvider = new Cesium.EllipsoidTerrainProvider();
             viewer = new Cesium.Viewer('cesiumContainer', {
                 animation: true,
-                timeline: true,
+                timeline: false,
                 baseLayerPicker: false,
                 geocoder: false,
-                homeButton: true,
+                homeButton: false,
                 sceneModePicker: true,
                 navigationHelpButton: false,
-                fullscreenButton: true,
-                infoBox: true,
+                fullscreenButton: false,
+                infoBox: false,
                 selectionIndicator: true,
                 imageryProvider: false,
                 terrainProvider: ellipsoidTerrainProvider,

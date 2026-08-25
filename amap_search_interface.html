@@ -4,8 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>高德地图搜索</title>
-    <script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=75bc5538c1031c7abe45df341c993fb8&plugin=AMap.Geocoder,AMap.RangingTool"></script>
-    <script type="text/javascript" src="gcoord.global.prod.js"></script>
+    <!--<script type="text/javascript" src="https://webapi.amap.com/maps?v=2.0&key=27cb354aa8ab3fd1e8cace8e3afbae39&plugin=AMap.Geocoder,AMap.RangingTool"></script>-->
+   <script type="text/javascript" src="https://pass-api.ibtmap.com/a/webapi/maps?key=HtGBJWn6BmrqrcSoe9gvSCf&plugin=AMap.Geocoder,AMap.RangingTool,AMap.ToolBar,AMap.Scale,AMap.Driving,AMap.Walking,AMap.PlaceSearch,AMap.AutoComplete,AMap.DistrictSearch,AMap.MouseTool,AMap.BezierCurveEditor"></script>
+  <script type="text/javascript" src="gcoord.global.prod.js"></script>
     <script type="text/javascript" src="region_data.js"></script>
     <style>
         body { margin: 0; padding: 0; display: flex; height: 100vh; font-family: 'Microsoft YaHei', Arial, sans-serif; overflow: hidden; }
@@ -167,7 +168,7 @@
     </div>
 
     <script>
-        const AMAP_KEY = '75bc5538c1031c7abe45df341c993fb8';
+        const AMAP_KEY = '27cb354aa8ab3fd1e8cace8e3afbae39';
         const AMAP_SEARCH_KEY = 'aff81f15a0d1ffefcb3775003985a9b3';
         let searchResults = [];
         let searchMode = 'one';
@@ -181,7 +182,7 @@
         let isRangingMode = false;
         let isPickMode = false;
         let rangingTool = null;
-        let normalLayer = null;
+        let defaultLayers = [];
         let satelliteLayer = null;
         let satelliteLabelLayer = null;
         let trafficLayer = null;
@@ -189,27 +190,28 @@
         let locateMarker = null;
 
         function initMap() {
-            normalLayer = new AMap.TileLayer({
-                mapStyle: 'normal'
+            satelliteLayer = new AMap.TileLayer.Satellite({
+                zIndex: 1
+            });
+            satelliteLabelLayer = new AMap.TileLayer({
+                zIndex: 10,
+                getTileUrl: 'https://webst0{1,2,3,4}.is.autonavi.com/appmaptile?style=8&x=[x]&y=[y]&z=[z]'
             });
             
-            satelliteLayer = new AMap.TileLayer.Satellite();
-            satelliteLabelLayer = new AMap.TileLayer.RoadNet({
-                zIndex: 10
-            });
-            
-            trafficLayer = new AMap.TileLayer.Traffic({
-                autoRefresh: true,
-                interval: 180
-            });
-            trafficLayer.hide();
+//          trafficLayer = new AMap.TileLayer.Traffic({
+//              autoRefresh: true,
+//              interval: 180
+//          });
+//          trafficLayer.hide();
 
             map = new AMap.Map('map', {
                 center: [108.95, 34.27],
                 zoom: 8,
                 resizeEnable: true,
-                layers: [normalLayer],
                 features: ['bg', 'road', 'building', 'point']
+            });
+            map.on('complete', function() {
+                defaultLayers = map.getLayers().slice();
             });
 
             rangingTool = new AMap.RangingTool(map);
@@ -254,12 +256,10 @@
             currentMapType = type;
             
             if (type === 'normal') {
-                map.setLayers([normalLayer]);
-             
+                map.setLayers(defaultLayers.length ? defaultLayers : [AMap.createDefaultLayer()]);
+                map.setFeatures(['bg', 'road', 'building', 'point']);
             } else if (type === 'satellite') {
-              
-                    map.setLayers([satelliteLayer, satelliteLabelLayer]);
-                
+                map.setLayers([satelliteLayer, satelliteLabelLayer]);
             }
         }
 
