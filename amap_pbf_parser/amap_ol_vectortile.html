@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>高德矢量 </title>
+  <link rel="stylesheet" href="ol.css" />
+  <style>
+    :root {
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --ok: #3dd68c;
+      --err: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #0f1419; color: var(--text); }
+    #map { position: absolute; inset: 0; background: #f2f3f7; }
+    .hud {
+      position: absolute; z-index: 10; top: 12px; left: 12px;
+      width: min(440px, calc(100vw - 24px));
+      background: color-mix(in srgb, var(--panel) 94%, transparent);
+      backdrop-filter: blur(8px);
+      border: 1px solid #2a3a52;
+      border-radius: 10px;
+      padding: 14px 16px;
+      box-shadow: 0 8px 28px rgba(0,0,0,.35);
+    }
+    .hud h1 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+    .hud p { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.45; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; align-items: center; }
+    label { font-size: 12px; color: var(--muted); }
+    input, button {
+      font: inherit; font-size: 12px; border-radius: 6px; border: 1px solid #334155;
+      background: #0f172a; color: var(--text); padding: 6px 8px;
+    }
+    input[type="text"] { flex: 1; min-width: 120px; }
+    button { cursor: pointer; background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+    button.secondary { background: #334155; }
+    .status { font-size: 12px; color: var(--muted); word-break: break-all; max-height: 80px; overflow: auto; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); }
+    .dump-panel {
+      display: none; margin-top: 8px; max-height: 220px; overflow: auto;
+      font-size: 11px; font-family: Consolas, "Courier New", monospace;
+      background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px;
+      white-space: pre-wrap; word-break: break-all; color: #cbd5e1;
+    }
+    .dump-panel .dump-head {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 6px; color: var(--muted); font-family: inherit; font-size: 11px;
+    }
+    .dump-panel .dump-close {
+      background: transparent; border: none; color: #93c5fd; padding: 0 4px; font-size: 11px; cursor: pointer;
+    }
+    .dump-panel.open { display: block; }
+    .legend { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: var(--muted); }
+    .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 3px; vertical-align: -1px; }
+    .ol-zoom { top: auto; bottom: 12px; left: 12px; }
+    .coord-hud {
+      position: absolute; z-index: 10; bottom: 12px; right: 12px;
+      padding: 6px 12px; font-size: 11px; line-height: 1.4;
+      font-family: Consolas, "Courier New", "Microsoft YaHei", monospace;
+      color: #334155; background: rgba(255, 255, 255, 0.94);
+      border: 1px solid #d1d5db; border-radius: 6px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      pointer-events: none; user-select: none;
+    }
+    .coord-hud .label { color: #64748b; margin-right: 4px; }
+    .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; background: #0f172a; font-size: 11px; color: #93c5fd; margin-right: 4px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="coordHud" class="coord-hud" title="鼠标实时坐标">—</div>
+  <div class="hud">
+
+    <div class="row">
+      <label>Key</label>
+      <input id="key" type="text" value="27cb354aa8ab3fd1e8cace8e3afbae39" />
+    </div>
+    <div class="row">
+      <label>version</label>
+      <input id="tileVersion" type="text" value="26_08_23_00" style="width:120px" />
+    </div>
+    <div class="row">
+      <span class="tag" id="styleTag">高德样式</span>
+      <span class="tag" id="styleVer">—</span>
+      <span class="tag" id="proxyTag">代理</span>
+    </div>
+    <div class="row status" id="bootStatus">加载中…</div>
+    <div class="row">
+      <button type="button" id="btnDumpFeatures">当前视图要素</button>
+    </div>
+    <div id="dumpPanel" class="dump-panel"></div>
+  </div>
+
+  <script src="pako.min.js"></script>
+  <script src="ol.js"></script>
+  <script src="browser.js"></script>
+  <script src="tile_config.js"></script>
+  <script src="gaode_style.js"></script>
+  <script src="amapTileLoader.browser.js"></script>
+  <script>
+(function () {
+  "use strict";
+
+  var STYLE_API = window.AMapGaodeStyle || window.AMapOlStyle;
+  var KEY_DEFAULT = "27cb354aa8ab3fd1e8cace8e3afbae39";
+
+  function setBootStatus(msg, ok) {
+    var el = $("bootStatus");
+    if (!el) return;
+    el.textContent = msg;
+    el.className = "status" + (ok === true ? " ok" : ok === false ? " err" : "");
+  }
+
+  function showProxyTag(loader) {
+    var el = $("proxyTag");
+    if (!el || !loader) return;
+    el.textContent = loader.useProxy ? "代理 /amap/*" : "直连 jsapi";
+  }
+
+  function $(id) { return document.getElementById(id); }
+  function getKey() { return $("key").value.trim() || KEY_DEFAULT; }
+  function getVersion() { return $("tileVersion").value.trim() || "26_08_23_00"; }
+
+  var map = new ol.Map({
+    target: "map",
+    layers: [],
+    view: new ol.View({
+      projection: "EPSG:4326",
+      center: [108.99, 34.29],
+      resolutions: AMapTileLoader.getViewResolutions(),
+      constrainResolution: true,
+      smoothResolutionConstraint: false,
+      zoom: AMapTileLoader.zToZoomIndex(11),
+      minZoom: 0,
+      maxZoom: AMapTileConfig.MAX_Z - AMapTileConfig.MIN_Z,
+      extent: [-180, -90, 180, 90],
+      multiWorld: false,
+    }),
+  });
+  window.map = map;
+
+  var loader = new AMapTileLoader({
+    pbfApi: window.AMapPbf,
+    styleApi: STYLE_API,
+    getKey: getKey,
+    getVersion: getVersion,
+    useProxy: false,
+    getTileUrl: "https://jsapi.amap.com/web_map/get_tile",
+  });
+  window.amapTileLoader = loader;
+  showProxyTag(loader);
+
+  function geomKindLabel(type) {
+    if (type === "Point" || type === "MultiPoint") return "点";
+    if (type === "LineString" || type === "MultiLineString") return "线";
+    if (type === "Polygon" || type === "MultiPolygon") return "面";
+    return type || "要素";
+  }
+
+  function summarizeCoordinates(coords, type) {
+    if (!coords) return null;
+    if (type === "Point") return coords;
+    if (type === "MultiPoint") return { count: coords.length, first: coords[0] };
+    if (type === "LineString") {
+      return { pointCount: coords.length, start: coords[0], end: coords[coords.length - 1] };
+    }
+    if (type === "MultiLineString") {
+      return { lineCount: coords.length, firstLinePoints: coords[0] ? coords[0].length : 0 };
+    }
+    if (type === "Polygon") {
+      var ring = coords[0] || [];
+      return { ringCount: coords.length, pointCount: ring.length, sample: ring.slice(0, 3) };
+    }
+    if (type === "MultiPolygon") return { polygonCount: coords.length };
+    return coords;
+  }
+
+  function geojsonFeaturePropsPlain(f) {
+    var out = {};
+    var p = (f && f.properties) || {};
+    Object.keys(p).forEach(function (k) { out[k] = p[k]; });
+    var g = (f && f.geometry) || {};
+    if (g.type) {
+      out._geometryType = g.type;
+      if (g.coordinates) out._coordinates = summarizeCoordinates(g.coordinates, g.type);
+    }
+    return out;
+  }
+
+  function featurePropsPlain(feature) {
+    var props = feature.getProperties ? feature.getProperties() : {};
+    var out = {};
+    Object.keys(props).forEach(function (k) {
+      if (k === "geometry") return;
+      out[k] = props[k];
+    });
+    var g = feature.getGeometry && feature.getGeometry();
+    if (g && g.getType) {
+      var gtype = g.getType();
+      out._geometryType = gtype;
+      if (g.getCoordinates) out._coordinates = summarizeCoordinates(g.getCoordinates(), gtype);
+    }
+    return out;
+  }
+
+  function summarizeFeatureDump(list) {
+    var byLayer = {};
+    var byGeom = { 点: 0, 线: 0, 面: 0, 其他: 0 };
+    list.forEach(function (f) {
+      var p = geojsonFeaturePropsPlain(f);
+      var ly = p.layer || "?";
+      byLayer[ly] = (byLayer[ly] || 0) + 1;
+      var kind = geomKindLabel(p._geometryType);
+      if (byGeom[kind] != null) byGeom[kind]++;
+      else byGeom["其他"]++;
+    });
+    return { total: list.length, byLayer: byLayer, byGeom: byGeom };
+  }
+
+  function dumpCurrentViewFeatures() {
+    var panel = $("dumpPanel");
+    if (panel.classList.contains("open") && panel.dataset.open === "1") {
+      panel.classList.remove("open");
+      panel.dataset.open = "0";
+      panel.innerHTML = "";
+      return;
+    }
+
+    var collected = loader.collectViewLayerFeatures({ onlyVisible: true });
+    var raw = collected.features;
+    var plain = raw.map(geojsonFeaturePropsPlain);
+    var summary = summarizeFeatureDump(raw);
+    var vz = loader.getViewVisualZ();
+    var tz = loader.getViewTileZ();
+
+    window.__viewFeaturesDump = {
+      viewZoom: vz,
+      tileZoom: tz,
+      tileIds: collected.tileIds,
+      missingTiles: collected.missingTiles,
+      summary: summary,
+      features: plain,
+    };
+
+    console.group("当前视图要素 · z" + vz + "→瓦片z" + tz + " · 共 " + plain.length + " 个");
+    console.log("按 layer 统计", summary.byLayer);
+    console.log("按几何统计", summary.byGeom);
+    console.log(plain);
+  }
+
+  map.on("click", function (evt) {
+    var hits = [];
+    map.forEachFeatureAtPixel(
+      evt.pixel,
+      function (feature, layer) {
+        hits.push({ feature: feature, layer: layer });
+      },
+      {
+        hitTolerance: 8,
+        layerFilter: function (layer) {
+          return layer === loader.vectorLayer || layer === loader.adminOverlayLayer;
+        },
+      }
+    );
+    if (!hits.length) return;
+    hits.forEach(function (hit, i) {
+      var props = featurePropsPlain(hit.feature);
+      var kind = geomKindLabel(props._geometryType);
+      console.log("[" + kind + " " + (i + 1) + "/" + hits.length + "]", props);
+    });
+  });
+
+  map.on("pointermove", function (evt) {
+    if (evt.dragging) return;
+    var coordHud = document.getElementById("coordHud");
+    if (coordHud && evt.coordinate) {
+      var lon = evt.coordinate[0];
+      var lat = evt.coordinate[1];
+      coordHud.innerHTML =
+        "<span class=\"label\">经度</span>" + lon.toFixed(6) +
+        "<span class=\"label\" style=\"margin-left:10px\">纬度</span>" + lat.toFixed(6);
+    }
+    var hit = map.hasFeatureAtPixel(evt.pixel, {
+      hitTolerance: 8,
+      layerFilter: function (layer) {
+        return layer === loader.vectorLayer || layer === loader.adminOverlayLayer;
+      },
+    });
+    map.getTargetElement().style.cursor = hit ? "pointer" : "";
+  });
+
+  map.getTargetElement().addEventListener("mouseleave", function () {
+    var coordHud = document.getElementById("coordHud");
+    if (coordHud) coordHud.textContent = "—";
+  });
+
+  $("btnDumpFeatures").addEventListener("click", dumpCurrentViewFeatures);
+
+  var configReloadTimer = null;
+  function scheduleConfigReload() {
+    clearTimeout(configReloadTimer);
+    configReloadTimer = setTimeout(function () {
+      if (!loader.map) return;
+      loader.reload();
+    }, 450);
+  }
+  $("key").addEventListener("change", scheduleConfigReload);
+  $("tileVersion").addEventListener("change", scheduleConfigReload);
+  $("key").addEventListener("input", scheduleConfigReload);
+  $("tileVersion").addEventListener("input", scheduleConfigReload);
+
+  function bootMap() {
+    if (!window.AMapPbf) {
+      setBootStatus("缺少 AMapPbf", false);
+      return;
+    }
+    if (!window.AMapOlStyle) {
+      setBootStatus("缺少 AMapOlStyle", false);
+      return;
+    }
+    loader.getKey = getKey;
+    loader.getVersion = getVersion;
+    loader.styleApi = STYLE_API;
+    loader.attach(map).then(function () {
+      setBootStatus("瓦片已加载（get_tile → auth_key → PBF）", true);
+    }).catch(function (err) {
+      setBootStatus("瓦片加载失败: " + (err && err.message ? err.message : err), false);
+    });
+  }
+
+  function showStyleMeta() {
+    var tag = $("styleTag");
+    var ver = $("styleVer");
+    if (tag) tag.textContent = "高德样式";
+    if (ver) ver.textContent = "路名·路牌·POI 完整";
+  }
+
+  if (STYLE_API && STYLE_API.preloadSpriteSheets) {
+    STYLE_API.preloadSpriteSheets("");
+  }
+  showStyleMeta();
+  setBootStatus("样式就绪", true);
+  bootMap();
+})();
+  </script>
+</body>
+</html>
