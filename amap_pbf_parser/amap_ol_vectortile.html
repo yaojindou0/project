@@ -30,30 +30,17 @@
     .hud p { margin: 0 0 10px; font-size: 12px; color: var(--muted); line-height: 1.45; }
     .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; align-items: center; }
     label { font-size: 12px; color: var(--muted); }
-    input, button {
+    input, select, button {
       font: inherit; font-size: 12px; border-radius: 6px; border: 1px solid #334155;
       background: #0f172a; color: var(--text); padding: 6px 8px;
     }
     input[type="text"] { flex: 1; min-width: 120px; }
+    select { min-width: 140px; }
     button { cursor: pointer; background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
     button.secondary { background: #334155; }
     .status { font-size: 12px; color: var(--muted); word-break: break-all; max-height: 80px; overflow: auto; }
     .status.ok { color: var(--ok); }
     .status.err { color: var(--err); }
-    .dump-panel {
-      display: none; margin-top: 8px; max-height: 220px; overflow: auto;
-      font-size: 11px; font-family: Consolas, "Courier New", monospace;
-      background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 8px;
-      white-space: pre-wrap; word-break: break-all; color: #cbd5e1;
-    }
-    .dump-panel .dump-head {
-      display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 6px; color: var(--muted); font-family: inherit; font-size: 11px;
-    }
-    .dump-panel .dump-close {
-      background: transparent; border: none; color: #93c5fd; padding: 0 4px; font-size: 11px; cursor: pointer;
-    }
-    .dump-panel.open { display: block; }
     .legend { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: 11px; color: var(--muted); }
     .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 3px; vertical-align: -1px; }
     .ol-zoom { top: auto; bottom: 12px; left: 12px; }
@@ -90,9 +77,37 @@
     </div>
     <div class="row status" id="bootStatus">加载中…</div>
     <div class="row">
+      <label>layer</label>
+      <select id="filterLayer">
+        <option value="" selected>不选</option>
+        <option value="region">region</option>
+        <option value="road">road</option>
+        <option value="boundary">boundary</option>
+        <option value="waterline">waterline</option>
+        <option value="poi">poi</option>
+        <option value="transit">transit</option>
+        <option value="building">building</option>
+        <option value="adminOverlay">adminOverlay</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>mainkey</label>
+      <input id="filterMainKey" type="text" />
+    </div>
+    <div class="row">
+      <label>subkey</label>
+      <input id="filterSubKey" type="text" />
+    </div>
+    <div class="row">
+      <label>坐标系</label>
+      <select id="dumpCrs">
+        <option value="gcj02" selected>gcj02</option>
+        <option value="wgs84">wgs84</option>
+      </select>
+    </div>
+    <div class="row">
       <button type="button" id="btnDumpFeatures">当前视图要素</button>
     </div>
-    <div id="dumpPanel" class="dump-panel"></div>
   </div>
 
   <script src="pako.min.js"></script>
@@ -161,32 +176,25 @@
     return type || "要素";
   }
 
-  function summarizeCoordinates(coords, type) {
-    if (!coords) return null;
-    if (type === "Point") return coords;
-    if (type === "MultiPoint") return { count: coords.length, first: coords[0] };
-    if (type === "LineString") {
-      return { pointCount: coords.length, start: coords[0], end: coords[coords.length - 1] };
-    }
-    if (type === "MultiLineString") {
-      return { lineCount: coords.length, firstLinePoints: coords[0] ? coords[0].length : 0 };
-    }
-    if (type === "Polygon") {
-      var ring = coords[0] || [];
-      return { ringCount: coords.length, pointCount: ring.length, sample: ring.slice(0, 3) };
-    }
-    if (type === "MultiPolygon") return { polygonCount: coords.length };
-    return coords;
-  }
-
   function geojsonFeaturePropsPlain(f) {
     var out = {};
     var p = (f && f.properties) || {};
-    Object.keys(p).forEach(function (k) { out[k] = p[k]; });
+    Object.keys(p).forEach(function (k) {
+      if (k === "tile") return;
+      out[k] = p[k];
+    });
+    if (p.tile && typeof p.tile === "object") {
+      out._tileX = p.tile.x;
+      out._tileY = p.tile.y;
+      out._tileZ = p.tile.z;
+    }
     var g = (f && f.geometry) || {};
     if (g.type) {
       out._geometryType = g.type;
-      if (g.coordinates) out._coordinates = summarizeCoordinates(g.coordinates, g.type);
+      if (g.coordinates) {
+        out._coordinates = g.coordinates;
+        out._geometry = { type: g.type, coordinates: g.coordinates };
+      }
     }
     return out;
   }
@@ -202,54 +210,312 @@
     if (g && g.getType) {
       var gtype = g.getType();
       out._geometryType = gtype;
-      if (g.getCoordinates) out._coordinates = summarizeCoordinates(g.getCoordinates(), gtype);
+      if (g.getCoordinates) {
+        var coords = g.getCoordinates();
+        out._coordinates = coords;
+        out._geometry = { type: gtype, coordinates: coords };
+      }
     }
     return out;
   }
 
   function summarizeFeatureDump(list) {
     var byLayer = {};
-    var byGeom = { 点: 0, 线: 0, 面: 0, 其他: 0 };
     list.forEach(function (f) {
       var p = geojsonFeaturePropsPlain(f);
       var ly = p.layer || "?";
       byLayer[ly] = (byLayer[ly] || 0) + 1;
-      var kind = geomKindLabel(p._geometryType);
-      if (byGeom[kind] != null) byGeom[kind]++;
-      else byGeom["其他"]++;
     });
-    return { total: list.length, byLayer: byLayer, byGeom: byGeom };
+    return { total: list.length, byLayer: byLayer };
+  }
+
+  function buildFeaturesByTileZ(collected) {
+    var maxTileZ = AMapTileConfig.MAX_TILE_Z;
+    var tileZ = collected.tileZoom != null ? collected.tileZoom : maxTileZ;
+    var block = collected.featuresByTileZ && tileZ != null
+      ? collected.featuresByTileZ[String(tileZ)]
+      : null;
+    if (!block) {
+      return {
+        tileZ: tileZ,
+        tileIds: collected.tileIds || [],
+        missingTiles: collected.missingTiles || [],
+        total: 0,
+        byLayerCounts: {},
+        byLayer: {},
+        byTileId: {},
+      };
+    }
+    var rawByLayer = block.byLayer || collected.featuresByLayer || {};
+    var byLayer = {};
+    var total = 0;
+    Object.keys(rawByLayer).sort().forEach(function (ly) {
+      var raw = rawByLayer[ly] || [];
+      var plain = raw.map(geojsonFeaturePropsPlain);
+      byLayer[ly] = { total: plain.length, features: plain };
+      total += plain.length;
+    });
+    var byLayerCounts = {};
+    Object.keys(rawByLayer).forEach(function (ly) {
+      byLayerCounts[ly] = (rawByLayer[ly] || []).length;
+    });
+    var byTileId = {};
+    Object.keys(block.byTileId || {}).sort().forEach(function (id) {
+      var raw = block.byTileId[id] || [];
+      byTileId[id] = { total: raw.length, features: raw.map(geojsonFeaturePropsPlain) };
+    });
+    return {
+      tileZ: block.tileZ != null ? block.tileZ : tileZ,
+      tileIds: block.tileIds || collected.tileIds || [],
+      missingTiles: block.missingTiles || collected.missingTiles || [],
+      total: total,
+      byLayerCounts: byLayerCounts,
+      byLayer: byLayer,
+      byTileId: byTileId,
+    };
+  }
+
+  function getDumpFilter() {
+    return {
+      layer: ($("filterLayer") && $("filterLayer").value || "").trim(),
+      mainKey: ($("filterMainKey") && $("filterMainKey").value || "").trim(),
+      subKey: ($("filterSubKey") && $("filterSubKey").value || "").trim(),
+    };
+  }
+
+  function dumpFilterActive(filter) {
+    return !!(filter.layer || filter.mainKey || filter.subKey);
+  }
+
+  function propMatchesFilter(actual, want) {
+    if (!want) return true;
+    if (actual == null || actual === "") return false;
+    if (String(actual) === want) return true;
+    var nWant = Number(want);
+    var nActual = Number(actual);
+    return !isNaN(nWant) && !isNaN(nActual) && nWant === nActual;
+  }
+
+  function featureMatchesDumpFilter(f, filter) {
+    var p = (f && f.properties) || {};
+    return propMatchesFilter(p.layer, filter.layer)
+      && propMatchesFilter(p.mainKey, filter.mainKey)
+      && propMatchesFilter(p.subKey, filter.subKey);
+  }
+
+  function toGeoJSONFeature(f) {
+    var props = {};
+    var p = (f && f.properties) || {};
+    Object.keys(p).forEach(function (k) {
+      if (k === "tile") return;
+      props[k] = p[k];
+    });
+    var g = f && f.geometry
+      ? { type: f.geometry.type, coordinates: f.geometry.coordinates }
+      : null;
+    return { type: "Feature", properties: props, geometry: g };
+  }
+
+  function getDumpCrs() {
+    var el = $("dumpCrs");
+    var v = el && el.value ? String(el.value).trim().toLowerCase() : "gcj02";
+    return v === "wgs84" ? "wgs84" : "gcj02";
+  }
+
+  /** 瓦片坐标为 GCJ-02；导出选 wgs84 时再转 */
+  function outOfChina(lng, lat) {
+    return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271;
+  }
+
+  function transformLat(lng, lat) {
+    var ret = -100.0 + 2.0 * lng + 3.0 * lat + 0.2 * lat * lat
+      + 0.1 * lng * lat + 0.2 * Math.sqrt(Math.abs(lng));
+    ret += (20.0 * Math.sin(6.0 * lng * Math.PI)
+      + 20.0 * Math.sin(2.0 * lng * Math.PI)) * 2.0 / 3.0;
+    ret += (20.0 * Math.sin(lat * Math.PI)
+      + 40.0 * Math.sin(lat / 3.0 * Math.PI)) * 2.0 / 3.0;
+    ret += (160.0 * Math.sin(lat / 12.0 * Math.PI)
+      + 320.0 * Math.sin(lat * Math.PI / 30.0)) * 2.0 / 3.0;
+    return ret;
+  }
+
+  function transformLng(lng, lat) {
+    var ret = 300.0 + lng + 2.0 * lat + 0.1 * lng * lng
+      + 0.1 * lng * lat + 0.1 * Math.sqrt(Math.abs(lng));
+    ret += (20.0 * Math.sin(6.0 * lng * Math.PI)
+      + 20.0 * Math.sin(2.0 * lng * Math.PI)) * 2.0 / 3.0;
+    ret += (20.0 * Math.sin(lng * Math.PI)
+      + 40.0 * Math.sin(lng / 3.0 * Math.PI)) * 2.0 / 3.0;
+    ret += (150.0 * Math.sin(lng / 12.0 * Math.PI)
+      + 300.0 * Math.sin(lng / 30.0 * Math.PI)) * 2.0 / 3.0;
+    return ret;
+  }
+
+  function gcj02ToWgs84(lng, lat) {
+    lng = Number(lng);
+    lat = Number(lat);
+    if (!isFinite(lng) || !isFinite(lat) || outOfChina(lng, lat)) {
+      return [lng, lat];
+    }
+    var a = 6378245.0;
+    var ee = 0.00669342162296594323;
+    var dLat = transformLat(lng - 105.0, lat - 35.0);
+    var dLng = transformLng(lng - 105.0, lat - 35.0);
+    var radLat = lat / 180.0 * Math.PI;
+    var magic = Math.sin(radLat);
+    magic = 1 - ee * magic * magic;
+    var sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * Math.PI);
+    dLng = (dLng * 180.0) / (a / sqrtMagic * Math.cos(radLat) * Math.PI);
+    return [lng * 2 - (lng + dLng), lat * 2 - (lat + dLat)];
+  }
+
+  function convertCoordsDeep(coords, crs) {
+    if (crs !== "wgs84" || coords == null) return coords;
+    if (typeof coords[0] === "number") {
+      var pt = gcj02ToWgs84(coords[0], coords[1]);
+      if (coords.length > 2) {
+        return [pt[0], pt[1]].concat(coords.slice(2));
+      }
+      return pt;
+    }
+    return coords.map(function (c) { return convertCoordsDeep(c, crs); });
+  }
+
+  function convertGeometryCrs(geom, crs) {
+    if (!geom || crs !== "wgs84") return geom;
+    return {
+      type: geom.type,
+      coordinates: convertCoordsDeep(geom.coordinates, crs),
+    };
+  }
+
+  function convertGeoJSONFeatureCrs(feat, crs) {
+    if (!feat || crs !== "wgs84") return feat;
+    return {
+      type: "Feature",
+      properties: feat.properties || {},
+      geometry: convertGeometryCrs(feat.geometry, crs),
+    };
+  }
+
+  function convertPlainFeatureCrs(plain, crs) {
+    if (!plain || crs !== "wgs84") return plain;
+    var out = {};
+    Object.keys(plain).forEach(function (k) { out[k] = plain[k]; });
+    if (out._geometry) out._geometry = convertGeometryCrs(out._geometry, crs);
+    if (out._coordinates) out._coordinates = convertCoordsDeep(out._coordinates, crs);
+    return out;
+  }
+
+  function convertTileBlockCrs(tileBlock, crs) {
+    if (!tileBlock || crs !== "wgs84") return tileBlock;
+    var byLayer = {};
+    Object.keys(tileBlock.byLayer || {}).forEach(function (ly) {
+      var bucket = tileBlock.byLayer[ly] || { total: 0, features: [] };
+      byLayer[ly] = {
+        total: bucket.total,
+        features: (bucket.features || []).map(function (f) {
+          return convertPlainFeatureCrs(f, crs);
+        }),
+      };
+    });
+    var byTileId = {};
+    Object.keys(tileBlock.byTileId || {}).forEach(function (id) {
+      var bucket = tileBlock.byTileId[id] || { total: 0, features: [] };
+      byTileId[id] = {
+        total: bucket.total,
+        features: (bucket.features || []).map(function (f) {
+          return convertPlainFeatureCrs(f, crs);
+        }),
+      };
+    });
+    return {
+      tileZ: tileBlock.tileZ,
+      tileIds: tileBlock.tileIds,
+      missingTiles: tileBlock.missingTiles,
+      total: tileBlock.total,
+      byLayerCounts: tileBlock.byLayerCounts,
+      byLayer: byLayer,
+      byTileId: byTileId,
+    };
   }
 
   function dumpCurrentViewFeatures() {
-    var panel = $("dumpPanel");
-    if (panel.classList.contains("open") && panel.dataset.open === "1") {
-      panel.classList.remove("open");
-      panel.dataset.open = "0";
-      panel.innerHTML = "";
+    var collected = loader.collectViewLayerFeatures({ onlyVisible: true });
+    var tileBlock = buildFeaturesByTileZ(collected);
+    var vz = loader.getViewVisualZ();
+    var tz = tileBlock.tileZ;
+    var filter = getDumpFilter();
+    var crs = getDumpCrs();
+
+    if (dumpFilterActive(filter)) {
+      var matched = (collected.features || []).filter(function (f) {
+        return featureMatchesDumpFilter(f, filter);
+      });
+      var fc = {
+        type: "FeatureCollection",
+        features: matched.map(function (f) {
+          return convertGeoJSONFeatureCrs(toGeoJSONFeature(f), crs);
+        }),
+      };
+      window.__viewFeaturesDump = {
+        viewZoom: vz,
+        tileZoom: tz,
+        crs: crs,
+        filter: filter,
+        geojson: fc,
+      };
+      var parts = [];
+      if (filter.layer) parts.push("layer=" + filter.layer);
+      if (filter.mainKey) parts.push("mainkey=" + filter.mainKey);
+      if (filter.subKey) parts.push("subkey=" + filter.subKey);
+      console.group(
+        "当前视图要素 · 过滤 " + parts.join(" ") +
+        " · crs=" + crs +
+        " · 地图z" + vz + " · 瓦片z" + tz +
+        " · 共 " + fc.features.length + " 个"
+      );
+      console.log(fc);
+      console.groupEnd();
       return;
     }
 
-    var collected = loader.collectViewLayerFeatures({ onlyVisible: true });
-    var raw = collected.features;
-    var plain = raw.map(geojsonFeaturePropsPlain);
-    var summary = summarizeFeatureDump(raw);
-    var vz = loader.getViewVisualZ();
-    var tz = loader.getViewTileZ();
-
+    var dumpBlock = convertTileBlockCrs(tileBlock, crs);
     window.__viewFeaturesDump = {
       viewZoom: vz,
       tileZoom: tz,
-      tileIds: collected.tileIds,
-      missingTiles: collected.missingTiles,
-      summary: summary,
-      features: plain,
+      crs: crs,
+      tileIds: dumpBlock.tileIds,
+      missingTiles: dumpBlock.missingTiles,
+      summary: { total: dumpBlock.total, byLayer: dumpBlock.byLayerCounts },
+      featuresByLayer: dumpBlock.byLayer,
+      featuresByTileZ: (function () {
+        var o = {};
+        o[String(tz)] = dumpBlock;
+        return o;
+      })(),
     };
 
-    console.group("当前视图要素 · z" + vz + "→瓦片z" + tz + " · 共 " + plain.length + " 个");
-    console.log("按 layer 统计", summary.byLayer);
-    console.log("按几何统计", summary.byGeom);
-    console.log(plain);
+    console.group(
+      "当前视图要素 · crs=" + crs +
+      " · 地图z" + vz + " · 瓦片z" + tz +
+      " · 共 " + dumpBlock.total + " 个"
+    );
+    console.log("瓦片 ID 列表 (z" + tz + ")", dumpBlock.tileIds);
+    if (dumpBlock.missingTiles.length) {
+      console.log("缺失瓦片", dumpBlock.missingTiles);
+    }
+    console.log("按 layer 汇总", dumpBlock.byLayerCounts);
+    console.group("按 layer");
+    Object.keys(dumpBlock.byLayer).sort().forEach(function (ly) {
+      var bucket = dumpBlock.byLayer[ly];
+      console.group(ly + " · " + bucket.total + " 个");
+      console.log(bucket.features);
+      console.groupEnd();
+    });
+    console.groupEnd();
+    console.groupEnd();
   }
 
   map.on("click", function (evt) {

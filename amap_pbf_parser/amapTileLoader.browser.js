@@ -72,6 +72,30 @@
     ].join("|");
   }
 
+  function getFeatureRepCoord(f) {
+    var g = f && f.geometry;
+    if (!g || !g.coordinates) return null;
+    var c = g.coordinates;
+    if (g.type === "Point") return c;
+    if (g.type === "MultiPoint") return c[0] || null;
+    if (g.type === "LineString") {
+      var mid = Math.floor(c.length / 2);
+      return c[mid] || c[0] || null;
+    }
+    if (g.type === "MultiLineString") {
+      var line = c[0];
+      if (!line || !line.length) return null;
+      var mid2 = Math.floor(line.length / 2);
+      return line[mid2] || line[0];
+    }
+    if (g.type === "Polygon") return c[0] && c[0][0] ? c[0][0] : null;
+    if (g.type === "MultiPolygon") {
+      var ring = c[0] && c[0][0];
+      return ring && ring[0] ? ring[0] : null;
+    }
+    return null;
+  }
+
   function buildingPositionKey(f) {
     var p = f.properties || {};
     var g = f.geometry || {};
@@ -272,6 +296,8 @@
 
     this.MIN_Z = this.tileCfg.MIN_Z;
     this.MAX_Z = this.tileCfg.MAX_Z;
+    this.TILE_ZS = this.tileCfg.TILE_ZS;
+    this.MAX_TILE_Z = this.tileCfg.MAX_TILE_Z;
     this.containRangeForZoom = this.tileCfg.containRangeForZoom;
     this.isValidTileZ = this.tileCfg.isValidTileZ;
     this.isValidPoiOverlayZ = this.tileCfg.isValidPoiOverlayZ;
@@ -1182,41 +1208,222 @@
     }
   };
 
+  AMapTileLoader.prototype.isOlFeatureVisibleAtView = function (olF) {
+    var api = this.styleApi;
+    if (!api || !api.featureVisibleAtView) {
+      if (!api || !api.featureZoomVisible) return true;
+      return api.featureZoomVisible(olF, this.getViewVisualZ());
+    }
+    try {
+      return api.featureVisibleAtView(olF, this.getViewVisualZ(), this.getViewZoomIndex());
+    } catch (e) {
+      return true;
+    }
+  };
+
+  AMapTileLoader.prototype.olFeatureToGeoJSON = function (olF) {
+    return this.geojsonFormat.writeFeatureObject(olF, {
+      dataProjection: "EPSG:4326",
+      featureProjection: "EPSG:4326",
+    });
+  };
+
+  AMapTileLoader.prototype.getMapVectorSource = function () {
+    var layer = this.vectorLayer;
+    if (layer && typeof layer.getSource === "function") {
+      var src = layer.getSource();
+      if (src) return src;
+    }
+    return this.vectorSource;
+  };
+
+  AMapTileLoader.prototype.isUsableSourceTile = function (sourceTile) {
+    if (!sourceTile) return false;
+    var feats = sourceTile.getFeatures ? sourceTile.getFeatures() : null;
+    if (feats && feats.length) return true;
+    return sourceTile.getState && sourceTile.getState() === this.ol.TileState.LOADED;
+  };
+
+  AMapTileLoader.prototype.getMapPixelRatio = function (map) {
+    if (map && typeof map.getPixelRatio === "function") {
+      return map.getPixelRatio();
+    }
+    if (typeof window !== "undefined" && window.devicePixelRatio) {
+      return window.devicePixelRatio;
+    }
+    return 1;
+  };
+
+  AMapTileLoader.prototype.forEachMapVectorFeatureInExtent = function (map, mapExtent, fn, loadedSourceIds) {
+    var source = this.getMapVectorSource();
+    if (!source || !map || typeof source.getTile !== "function") return;
+
+    var view = map.getView();
+    var viewZ = view.getZoom();
+    if (viewZ == null || isNaN(viewZ)) return;
+
+    var projection = view.getProjection();
+    var pixelRatio = this.getMapPixelRatio(map);
+    var renderTileGrid = source.getTileGridForProjection(projection);
+    var z = Math.round(Number(viewZ));
+    var range = renderTileGrid.getTileRangeForExtentAndZ(mapExtent, z);
+    if (!range) return;
+
+    var visited = new Set();
+    var self = this;
+
+    for (var x = range.minX; x <= range.maxX; x++) {
+      for (var y = range.minY; y <= range.maxY; y++) {
+        var renderTile;
+        try {
+          renderTile = source.getTile(z, x, y, pixelRatio, projection);
+        } catch (e) {
+          continue;
+        }
+        if (!renderTile) continue;
+
+        var sourceTiles = renderTile.sourceTiles;
+        if ((!sourceTiles || !sourceTiles.length) && renderTile.getSourceTiles) {
+          try {
+            sourceTiles = renderTile.getSourceTiles();
+          } catch (e2) {
+            sourceTiles = [];
+          }
+        }
+        if (!sourceTiles || !sourceTiles.length) continue;
+
+        sourceTiles.forEach(function (sourceTile) {
+          if (!self.isUsableSourceTile(sourceTile)) return;
+          var url = sourceTile.getTileUrl ? sourceTile.getTileUrl() : sourceTile.key || "";
+          if (!url || url.indexOf("amap://") !== 0 || visited.has(url)) return;
+          visited.add(url);
+          var sid = url.replace("amap://", "");
+          if (loadedSourceIds) loadedSourceIds[sid] = true;
+          (sourceTile.getFeatures() || []).forEach(function (olF) {
+            fn(olF, sid, sourceTile);
+          });
+        });
+      }
+    }
+  };
+
+  AMapTileLoader.prototype.hasLoadedMapTileForZ = function (x, y, z, loadedSourceIds) {
+    var self = this;
+    function hasId(tx, ty, tz) {
+      var id = tileId(tx, ty, tz);
+      if (loadedSourceIds && loadedSourceIds[id]) return true;
+      var source = self.getMapVectorSource();
+      if (!source || !source.sourceTiles_) return false;
+      var url = "amap://" + id;
+      return self.isUsableSourceTile(source.sourceTiles_[url]);
+    }
+    if (hasId(x, y, z)) return true;
+    for (var i = self.TILE_ZS.length - 1; i >= 0; i--) {
+      var pz = self.TILE_ZS[i];
+      if (pz >= z) continue;
+      var scale = 1 << (z - pz);
+      var px = self.normalizeTileX(Math.floor(x / scale), pz);
+      var py = Math.floor(y / scale);
+      if (hasId(px, py, pz)) return true;
+    }
+    return false;
+  };
+
+  AMapTileLoader.prototype.withFeatureTileZ = function (f, x, y, z) {
+    var props = Object.assign({}, f.properties || {}, { tile: { x: x, y: y, z: z } });
+    return Object.assign({}, f, { properties: props });
+  };
+
+  AMapTileLoader.prototype.tileCoordAtZ = function (lon, lat, z) {
+    var tc = this.tileGrid.getTileCoordForCoordAndZ([lon, lat], z);
+    if (!tc) return null;
+    var x = this.normalizeTileX(tc[1], z);
+    return { x: x, y: tc[2], z: z, id: tileId(x, tc[2], z) };
+  };
+
   AMapTileLoader.prototype.collectViewLayerFeatures = function (opts) {
     opts = opts || {};
     var onlyVisible = opts.onlyVisible !== false;
-    if (!this.map) return { features: [], tileIds: [], missingTiles: [] };
-    var size = this.map.getSize();
-    if (!size) return { features: [], tileIds: [], missingTiles: [] };
-    var extent = this.map.getView().calculateExtent(size);
-    var viewTiles = this.getViewTiles();
-    var tileIdSet = {};
-    viewTiles.forEach(function (t) { tileIdSet[t.id] = true; });
+    var self = this;
+    if (!self.map) {
+      return {
+        viewZoom: self.MIN_Z,
+        tileZoom: null,
+        features: [],
+        tileIds: [],
+        missingTiles: [],
+        featuresByTileZ: {},
+        featuresByLayer: {},
+      };
+    }
+    var size = self.map.getSize();
+    if (!size) {
+      return {
+        viewZoom: self.getViewVisualZ(),
+        tileZoom: null,
+        features: [],
+        tileIds: [],
+        missingTiles: [],
+        featuresByTileZ: {},
+        featuresByLayer: {},
+      };
+    }
+    var extent = self.map.getView().calculateExtent(size);
+    var collectZ =
+      opts.tileZ != null && !isNaN(Number(opts.tileZ))
+        ? Math.round(Number(opts.tileZ))
+        : self.MAX_TILE_Z;
+    collectZ = Math.min(Math.max(collectZ, self.TILE_ZS[0]), self.MAX_TILE_Z);
+    if (!self.isValidTileZ(collectZ)) collectZ = self.MAX_TILE_Z;
+
+    var viewTiles = self.collectTilesAtZoom(collectZ, extent);
+    var viewTileSet = {};
+    viewTiles.forEach(function (t) { viewTileSet[t.id] = true; });
+    var byTileId = {};
+    var byLayer = {};
+    viewTiles.forEach(function (t) { byTileId[t.id] = []; });
 
     var out = [];
     var seen = new Set();
     var missingTiles = [];
-    var self = this;
+    var loadedSourceIds = {};
+
+    function pushFeature(f, tx, ty, tz) {
+      var k = featureKey(f);
+      if (seen.has(k)) return;
+      seen.add(k);
+      var normalized = self.withFeatureTileZ(f, tx, ty, tz);
+      out.push(normalized);
+      var tileKey = tileId(tx, ty, tz);
+      if (!byTileId[tileKey]) byTileId[tileKey] = [];
+      byTileId[tileKey].push(normalized);
+      var ly = (normalized.properties && normalized.properties.layer) || "?";
+      if (!byLayer[ly]) byLayer[ly] = [];
+      byLayer[ly].push(normalized);
+    }
+
+    self.forEachMapVectorFeatureInExtent(self.map, extent, function (olF) {
+      if (!olF || !olF.getGeometry) return;
+      var geom = olF.getGeometry();
+      if (!geom || !self.ol.extent.intersects(extent, geom.getExtent())) return;
+      if (onlyVisible && !self.isOlFeatureVisibleAtView(olF)) return;
+      var gj = self.olFeatureToGeoJSON(olF);
+      if (!gj || !gj.properties) return;
+      var pt = getFeatureRepCoord(gj);
+      if (!pt) return;
+      var tc = self.tileCoordAtZ(pt[0], pt[1], collectZ);
+      if (!tc || !viewTileSet[tc.id]) return;
+      pushFeature(gj, tc.x, tc.y, collectZ);
+    }, loadedSourceIds);
 
     viewTiles.forEach(function (t) {
-      if (!self.featureCache.has(t.id)) missingTiles.push(t.id);
+      if (!self.hasLoadedMapTileForZ(t.x, t.y, collectZ, loadedSourceIds)) {
+        missingTiles.push(t.id);
+      }
     });
 
-    this.featureCache.forEach(function (features, id) {
-      if (!tileIdSet[id]) return;
-      (features || []).forEach(function (f) {
-        if (!f || !f.properties) return;
-        if (!self.featureIntersectsExtent(f, extent)) return;
-        if (onlyVisible && !self.isGeoFeatureVisibleAtView(f)) return;
-        var k = featureKey(f);
-        if (seen.has(k)) return;
-        seen.add(k);
-        out.push(f);
-      });
-    });
-
-    if (this.adminOverlayLayer) {
-      var adminSrc = this.adminOverlayLayer.getSource();
+    if (self.adminOverlayLayer) {
+      var adminSrc = self.adminOverlayLayer.getSource();
       if (adminSrc && adminSrc.getFeatures) {
         adminSrc.getFeatures().forEach(function (olF) {
           if (!olF.getGeometry || !olF.getGeometry()) return;
@@ -1227,18 +1434,33 @@
           });
           gj.properties = gj.properties || {};
           gj.properties.layer = gj.properties.layer || "adminOverlay";
-          var k = featureKey(gj);
-          if (seen.has(k)) return;
-          seen.add(k);
-          out.push(gj);
+          var pt = getFeatureRepCoord(gj);
+          var tc = pt ? self.tileCoordAtZ(pt[0], pt[1], collectZ) : null;
+          var tx = tc ? tc.x : (viewTiles[0] ? viewTiles[0].x : 0);
+          var ty = tc ? tc.y : (viewTiles[0] ? viewTiles[0].y : 0);
+          pushFeature(gj, tx, ty, collectZ);
         });
       }
     }
 
-    return {
-      features: out,
-      tileIds: Object.keys(tileIdSet),
+    var tileIds = viewTiles.map(function (t) { return t.id; });
+    var featuresByTileZ = {};
+    featuresByTileZ[String(collectZ)] = {
+      tileZ: collectZ,
+      tileIds: tileIds,
       missingTiles: missingTiles,
+      byTileId: byTileId,
+      byLayer: byLayer,
+    };
+
+    return {
+      viewZoom: self.getViewVisualZ(),
+      tileZoom: collectZ,
+      features: out,
+      tileIds: tileIds,
+      missingTiles: missingTiles,
+      featuresByTileZ: featuresByTileZ,
+      featuresByLayer: byLayer,
     };
   };
 
