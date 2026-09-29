@@ -9,8 +9,14 @@
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
+    a.rel = "noopener";
+    a.style.display = "none";
+    document.body.appendChild(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setTimeout(() => {
+      a.remove();
+      URL.revokeObjectURL(url);
+    }, 2000);
   }
 
   function downloadBytes(bytes, filename, mime = "application/pdf") {
@@ -268,13 +274,58 @@
       "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
   }
 
+  /** 移动端画布像素上限（约 16M），超限会得到空白图 */
+  function clampRenderScale(baseW, baseH, scale) {
+    const maxArea = 16777216;
+    const maxSide = 4096;
+    let s = Math.max(0.5, Number(scale) || 1.5);
+    const w = baseW * s;
+    const h = baseH * s;
+    if (w <= maxSide && h <= maxSide && w * h <= maxArea) return s;
+    const bySide = Math.min(maxSide / baseW, maxSide / baseH);
+    const byArea = Math.sqrt(maxArea / (baseW * baseH));
+    return Math.max(0.5, Math.min(s, bySide, byArea) * 0.98);
+  }
+
+  /** toBlob 在部分手机浏览器会返回 null，需回退 toDataURL */
+  async function canvasToBlob(canvas, mime = "image/png", quality = 0.92) {
+    const blob = await new Promise((res) => {
+      try {
+        canvas.toBlob((b) => res(b), mime, quality);
+      } catch (_) {
+        res(null);
+      }
+    });
+    if (blob && blob.size > 0) return blob;
+    const dataUrl = canvas.toDataURL(mime, quality);
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) throw new Error("页面导出失败（画布为空）");
+    const bin = atob(dataUrl.slice(comma + 1));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+
+  async function canvasToBytes(canvas, mime = "image/png", quality = 0.92) {
+    const blob = await canvasToBlob(canvas, mime, quality);
+    return new Uint8Array(await blob.arrayBuffer());
+  }
+
   async function renderPageToCanvas(pdf, pageNum, scale = 1.5) {
     const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale });
+    const base = page.getViewport({ scale: 1 });
+    const safeScale = clampRenderScale(base.width, base.height, scale);
+    const viewport = page.getViewport({ scale: safeScale });
     const canvas = document.createElement("canvas");
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+    const w = Math.max(1, Math.ceil(viewport.width));
+    const h = Math.max(1, Math.ceil(viewport.height));
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    if (!ctx) throw new Error("无法创建画布上下文");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+    await page.render({ canvasContext: ctx, viewport }).promise;
     return canvas;
   }
 
@@ -287,9 +338,7 @@
     const ext = mime === "image/jpeg" ? "jpg" : "png";
     for (let i = 1; i <= pdf.numPages; i++) {
       const canvas = await renderPageToCanvas(pdf, i, scale);
-      const blob = await new Promise((res) =>
-        canvas.toBlob((b) => res(b), mime, 0.92)
-      );
+      const blob = await canvasToBlob(canvas, mime, 0.92);
       out.push({ name: `page-${i}.${ext}`, blob });
     }
     return out;
@@ -690,9 +739,11 @@
     return `<w:p>${before}<w:r><w:rPr>${bold}<w:sz w:val="${size}"/><w:szCs w:val="${size}"/><w:rFonts w:ascii="${escapeXml(font)}" w:hAnsi="${escapeXml(font)}" w:eastAsia="${escapeXml(font)}"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
   }
 
-  function wImagePara(relId, cxEmu, cyEmu, docPrId) {
+  function wImagePara(relId, cxEmu, cyEmu, docPrId, imgName) {
+    // 勿用 w:line="0"+lineRule="exact"：手机 Word/WPS 按行高裁切会导致整页空白
+    const name = imgName || `image${docPrId}.png`;
     return `<w:p><w:pPr>
-  <w:spacing w:before="0" w:after="0" w:line="0" w:lineRule="exact"/>
+  <w:spacing w:before="0" w:after="0"/>
   <w:ind w:left="0" w:right="0" w:firstLine="0"/>
   <w:jc w:val="left"/>
 </w:pPr><w:r><w:drawing>
@@ -705,7 +756,7 @@
     <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
       <pic:pic>
         <pic:nvPicPr>
-          <pic:cNvPr id="0" name="image${docPrId}.png"/>
+          <pic:cNvPr id="${docPrId}" name="${escapeXml(name)}"/>
           <pic:cNvPicPr><a:picLocks noChangeAspect="1"/></pic:cNvPicPr>
         </pic:nvPicPr>
         <pic:blipFill>
@@ -736,9 +787,19 @@
     return pdfToDocxExactLayout(pdf, options);
   }
 
+  function preferJpegOnMobile() {
+    const ua = (navigator.userAgent || "").toLowerCase();
+    return /iphone|ipad|ipod|android|mobile/.test(ua);
+  }
+
   /** 高清整页图 + 与 PDF 一致的纸张尺寸/零边距 → 排版与字体视觉不变 */
   async function pdfToDocxExactLayout(pdf, options = {}) {
-    const scale = options.imageScale || 2.5;
+    let scale = options.imageScale || 2.5;
+    // 手机内存更紧：超清易出空白画布，自动封顶到 2
+    if (preferJpegOnMobile()) scale = Math.min(scale, 2);
+    const useJpeg = options.imageFormat === "jpeg" || preferJpegOnMobile();
+    const mime = useJpeg ? "image/jpeg" : "image/png";
+    const ext = useJpeg ? "jpg" : "png";
     const bodyParts = [];
     const media = [];
     let relIdSeq = 1;
@@ -753,16 +814,17 @@
       pageSizes.push({ w: wTwip, h: hTwip });
 
       const canvas = await renderPageToCanvas(pdf, i, scale);
-      const blob = await new Promise((res) =>
-        canvas.toBlob((b) => res(b), "image/png")
-      );
-      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const bytes = await canvasToBytes(canvas, mime, 0.92);
+      if (!bytes.length) {
+        throw new Error(`第 ${i} 页导出失败，请降低清晰度后重试`);
+      }
+      const fileName = `media/page-${i}.${ext}`;
       const relId = `rIdImg${relIdSeq++}`;
-      media.push({ name: `media/page-${i}.png`, bytes, relId });
+      media.push({ name: fileName, bytes, relId });
 
       const cx = Math.round(base.width * (914400 / 72));
       const cy = Math.round(base.height * (914400 / 72));
-      bodyParts.push(wImagePara(relId, cx, cy, imgDocPrId++));
+      bodyParts.push(wImagePara(relId, cx, cy, imgDocPrId++, `page-${i}.${ext}`));
 
       if (i < pdf.numPages) {
         bodyParts.push(`<w:p><w:pPr><w:sectPr>
