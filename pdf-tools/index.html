@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>所有工具 - 100%免费 - PDF Tools</title>
+  <meta name="description" content="一览全部 PDF 工具，按类别排列，可通过搜索快速找到合适的工具。文件在本地浏览器处理。" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand" title="返回全部工具">
+      <span class="brand-mark">🐑</span>
+      <span>PDF Tools</span>
+    </div>
+    <div class="search-wrap">
+      <input id="search" type="search" placeholder="搜索工具，例如：合并、压缩、水印…" autocomplete="off" />
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar" id="side-nav"></aside>
+
+    <main class="main">
+      <!-- Catalog -->
+      <div id="view-catalog">
+        <div class="hero">
+          <h1>所有工具 <span class="badge-free">100% 免费 · 本地处理</span></h1>
+          <p>
+            一览全部工具，按类别排列，可通过搜索快速找到合适的工具。
+            功能布局对齐
+            <a href="https://tools.pdf24.org/zh/all-tools" target="_blank" rel="noopener">PDF24 所有工具</a>
+            ，文件在您的浏览器中处理，默认不上传服务器。
+          </p>
+        </div>
+        <div id="catalog-sections"></div>
+        <p class="footer-note">
+          PDF↔Word 默认按原站思路做「精确还原」：PDF→Word 为高清整页嵌入（排版/字体视觉不变）；Word→PDF 按文档原排版与字体渲染后导出。
+        </p>
+      </div>
+
+      <!-- Tool workspace -->
+      <div id="view-tool">
+        <div class="tool-header">
+          <button type="button" class="btn btn-ghost" id="btn-back">← 全部工具</button>
+          <h1 id="tool-title">工具</h1>
+          <p class="sub" id="tool-desc"></p>
+        </div>
+
+        <div class="workspace">
+          <div>
+            <div id="upload-block">
+              <div class="dropzone" id="dropzone">
+                <div class="dz-icon">📁</div>
+                <strong>拖放文件到此处</strong>
+                <p>或点击选择文件</p>
+                <input type="file" id="file-input" class="hidden" />
+              </div>
+            </div>
+            <div class="file-list" id="file-list"></div>
+            <div class="preview-area hidden" id="preview-area"></div>
+          </div>
+
+          <aside class="panel">
+            <h3>选项</h3>
+            <div id="tool-options"></div>
+            <div class="actions">
+              <button type="button" class="btn btn-primary" id="btn-run">开始处理</button>
+              <button type="button" class="btn btn-ghost" id="btn-clear">清空</button>
+            </div>
+            <div class="status" id="status"></div>
+          </aside>
+        </div>
+      </div>
+
+      <!-- Finance tools -->
+      <div id="view-finance" class="hidden">
+        <div class="hero finance-hero">
+          <h1>财务工具 <span class="badge-free">本地表格 · 无后台</span></h1>
+          <p>从 Excel/CSV 导入后即可编辑；Chrome/Edge 可记住文件并写回原表。</p>
+        </div>
+        <div class="finance-tabs" id="finance-tabs" role="tablist">
+          <button type="button" class="finance-tab active" data-tab="overview" role="tab">总览</button>
+          <button type="button" class="finance-tab" data-tab="inventory" role="tab">进销存 · 出入库明细</button>
+          <button type="button" class="finance-tab" data-tab="stock" role="tab">库存汇总</button>
+          <button type="button" class="finance-tab" data-tab="stats" role="tab">进出统计</button>
+          <button type="button" class="finance-tab" data-tab="ledger" role="tab">财务台账</button>
+          <button type="button" class="finance-tab" data-tab="budget" role="tab">预算表</button>
+          <button type="button" class="finance-tab" data-tab="expense" role="tab">费用统计</button>
+          <button type="button" class="finance-tab" data-tab="reimburse" role="tab">报销汇总</button>
+          <button type="button" class="finance-tab" data-tab="pivot" role="tab">数据透视分析</button>
+        </div>
+
+        <div class="finance-panel" id="finance-panel-overview" data-panel="overview">
+          <div class="inv-toolbar">
+            <div class="inv-file-meta">
+              <span class="chip">各模块数据一览 · 纯本地</span>
+              <span class="status" id="overview-status"></span>
+            </div>
+            <div class="inv-actions">
+              <button type="button" class="btn btn-ghost" id="overview-btn-refresh">刷新总览</button>
+              <button type="button" class="btn btn-primary" id="overview-btn-demo">填充演示数据</button>
+              <button type="button" class="btn btn-ghost" id="overview-btn-backup">备份全部财务数据</button>
+              <button type="button" class="btn btn-ghost" id="overview-btn-restore">恢复备份</button>
+              <input type="file" id="overview-restore-input" class="hidden" accept=".xlsx,.json" />
+            </div>
+          </div>
+          <div class="stats-cards" id="overview-cards"></div>
+          <div class="overview-grid" id="overview-grid"></div>
+          <div class="inv-actions" style="margin-top:16px">
+            <button type="button" class="btn btn-ghost" data-goto="inventory">去进销存</button>
+            <button type="button" class="btn btn-ghost" data-goto="ledger">去台账</button>
+            <button type="button" class="btn btn-ghost" data-goto="budget">去预算</button>
+            <button type="button" class="btn btn-ghost" data-goto="expense">去费用</button>
+            <button type="button" class="btn btn-ghost" data-goto="reimburse">去报销</button>
+            <button type="button" class="btn btn-ghost" data-goto="pivot">去透视分析</button>
+            <button type="button" class="btn btn-primary" id="overview-btn-sync-budget">费用同步到预算已用</button>
+          </div>
+        </div>
+
+        <div class="finance-panel hidden" id="finance-panel-inventory" data-panel="inventory">
+          <div class="inv-toolbar">
+            <div class="inv-file-meta">
+              <span class="chip" id="inv-file-label">未选择数据表</span>
+              <span class="status" id="inv-status"></span>
+            </div>
+            <div class="inv-actions">
+              <button type="button" class="btn btn-primary" id="inv-btn-open">选择 / 导入表格</button>
+              <button type="button" class="btn btn-ghost" id="inv-btn-reload">重新从原表加载</button>
+              <button type="button" class="btn btn-primary" id="inv-btn-save">保存到原表</button>
+              <button type="button" class="btn btn-ghost" id="inv-btn-export">另存为…</button>
+              <button type="button" class="btn btn-ghost" id="inv-btn-template">下载空模板</button>
+              <button type="button" class="btn btn-ghost" id="inv-btn-add">新增行</button>
+              <label class="inv-autosave"><input type="checkbox" id="inv-autosave" /> 改后自动保存</label>
+            </div>
+          </div>
+          <div class="inv-filters">
+            <input type="search" id="inv-search" placeholder="搜索商品 / 单号 / 备注…" />
+            <select id="inv-type-filter">
+              <option value="">全部类型</option>
+              <option value="入库">入库</option>
+              <option value="出库">出库</option>
+              <option value="调拨">调拨</option>
+              <option value="盘点">盘点</option>
+            </select>
+          </div>
+          <div class="inv-table-wrap">
+            <table class="inv-table" id="inv-table">
+              <thead id="inv-thead"></thead>
+              <tbody id="inv-tbody"></tbody>
+            </table>
+            <div class="empty-hint" id="inv-empty">请先导入 Excel（.xlsx）或 CSV 出入库明细表，或下载空模板后填写</div>
+          </div>
+        </div>
+
+        <div class="finance-panel hidden" id="finance-panel-stock" data-panel="stock">
+          <div class="inv-toolbar">
+            <div class="inv-file-meta">
+              <span class="chip">根据出入库明细自动汇总</span>
+              <span class="status" id="stock-status"></span>
+            </div>
+            <div class="inv-actions">
+              <button type="button" class="btn btn-ghost" id="stock-btn-refresh">刷新汇总</button>
+              <button type="button" class="btn btn-primary" id="stock-btn-export">导出库存表</button>
+            </div>
+          </div>
+          <div class="inv-filters">
+            <input type="search" id="stock-search" placeholder="搜索商品编码 / 名称 / 仓库…" />
+            <label class="inv-autosave"><input type="checkbox" id="stock-hide-zero" checked /> 隐藏零库存</label>
+          </div>
+          <div class="inv-table-wrap">
+            <table class="inv-table" id="stock-table">
+              <thead>
+                <tr>
+                  <th>商品编码</th>
+                  <th>商品名称</th>
+                  <th>规格</th>
+                  <th>单位</th>
+                  <th>仓库</th>
+                  <th>入库合计</th>
+                  <th>出库合计</th>
+                  <th>当前库存</th>
+                  <th>库存金额</th>
+                </tr>
+              </thead>
+              <tbody id="stock-tbody"></tbody>
+            </table>
+            <div class="empty-hint" id="stock-empty">暂无数据，请先在「出入库明细」导入表格</div>
+          </div>
+        </div>
+
+        <div class="finance-panel hidden" id="finance-panel-stats" data-panel="stats">
+          <div class="inv-toolbar">
+            <div class="inv-file-meta">
+              <span class="chip">按类型 / 日期汇总出入库</span>
+            </div>
+            <div class="inv-actions">
+              <button type="button" class="btn btn-ghost" id="stats-btn-refresh">刷新统计</button>
+            </div>
+          </div>
+          <div class="stats-cards" id="stats-cards"></div>
+          <div class="inv-table-wrap" style="margin-top:12px">
+            <table class="inv-table" id="stats-table">
+              <thead>
+                <tr>
+                  <th>日期</th>
+                  <th>入库单数</th>
+                  <th>入库数量</th>
+                  <th>入库金额</th>
+                  <th>出库单数</th>
+                  <th>出库数量</th>
+                  <th>出库金额</th>
+                </tr>
+              </thead>
+              <tbody id="stats-tbody"></tbody>
+            </table>
+            <div class="empty-hint" id="stats-empty">暂无统计数据</div>
+          </div>
+        </div>
+
+        <div id="finance-extra-panels"></div>
+
+        <div class="finance-panel hidden" id="finance-panel-pivot" data-panel="pivot">
+          <div class="inv-toolbar">
+            <div class="inv-file-meta">
+              <span class="chip">多维汇总 · 类似 Excel 数据透视表</span>
+              <span class="status" id="pivot-status"></span>
+            </div>
+            <div class="inv-actions">
+              <button type="button" class="btn btn-primary" id="pivot-btn-run">生成透视</button>
+              <button type="button" class="btn btn-ghost" id="pivot-btn-export">导出结果</button>
+            </div>
+          </div>
+          <div class="inv-filters pivot-filters">
+            <label>数据源
+              <select id="pivot-source">
+                <option value="expense">费用统计</option>
+                <option value="reimburse">报销汇总</option>
+                <option value="ledger">财务台账</option>
+                <option value="budget">预算表</option>
+                <option value="inventory">进销存明细</option>
+              </select>
+            </label>
+            <label>行字段 <select id="pivot-row"></select></label>
+            <label>列字段 <select id="pivot-col"></select></label>
+            <label>值字段 <select id="pivot-val"></select></label>
+            <label>聚合
+              <select id="pivot-agg">
+                <option value="sum">求和</option>
+                <option value="count">计数</option>
+                <option value="avg">平均</option>
+                <option value="max">最大</option>
+                <option value="min">最小</option>
+              </select>
+            </label>
+          </div>
+          <div class="inv-table-wrap">
+            <table class="inv-table" id="pivot-table">
+              <thead id="pivot-thead"></thead>
+              <tbody id="pivot-tbody"></tbody>
+            </table>
+            <div class="empty-hint" id="pivot-empty">请先在各业务 Tab 导入数据，再选择字段生成透视表</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Libraries (CDN) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.3/dist/docx-preview.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <script src="js/tools-data.js"></script>
+  <div style="display:none" aria-hidden="true"></div>
+  <script src="js/pdf-ops.js"></script>
+  <script src="js/finance.js"></script>
+  <script src="js/finance-books.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
