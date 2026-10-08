@@ -1,0 +1,17 @@
+镜叙静态站 · 默认在线版 · 原线上接口
+====================================
+
+默认已直连：
+  https://www.doubao.com/samantha/chat/completion
+  https://www.doubao.com/chat/completion
+  https://ark.cn-beijing.volces.com/api/v3/images/generations
+  https://ark.cn-beijing.volces.com/api/v3/contents/generations/tasks
+  https://www.doubao.com/passport/web/send_code/
+  https://www.doubao.com/passport/web/sms_login/
+  https://www.doubao.com/passport/account/info/v2/
+
+可选：若浏览器跨域受限，部署 jingxu-web 后在 config.js 填写：
+  window.__JINGXU_API_BASE__ = "https://你的域名";
+  （将改走自建根 + 同名上游原路径）
+
+设置里「离线演示 Mock」默认关闭。
