@@ -1,0 +1,41 @@
+{
+  "name": "aisource",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "pack": "node scripts/pack-web.mjs",
+    "pack:assemble": "node scripts/assemble-release.mjs",
+    "pack:html": "node scripts/pack-html.mjs",
+    "lint": "eslint",
+    "auth-stub": "node scripts/auth-proxy-stub.mjs"
+  },
+  "dependencies": {
+    "framer-motion": "^13.4.5",
+    "jsonrepair": "^3.15.0",
+    "lucide-react": "^1.48.0",
+    "next": "16.3.6",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "server-only": "^0.0.1",
+    "uuid": "^14.0.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/uuid": "^10.0.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.6",
+    "react-router-dom": "^7.18.4",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vite": "^8.3.1",
+    "vite-plugin-singlefile": "^2.3.3"
+  }
+}

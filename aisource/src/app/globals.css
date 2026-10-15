@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+:root {
+  --ink: #0c1a1c;
+  --ink-soft: #163033;
+  --mist: #d7e4e6;
+  --paper: #eef4f5;
+  --teal: #1f6f78;
+  --teal-bright: #2a9aa4;
+  --cinnabar: #c83c28;
+  --cinnabar-soft: #e85a45;
+  --gold: #c4a35a;
+  --muted: #5d7478;
+  --line: rgba(15, 40, 44, 0.12);
+  --glow-teal: rgba(42, 154, 164, 0.35);
+}
+
+@theme inline {
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-mist: var(--mist);
+  --color-paper: var(--paper);
+  --color-teal: var(--teal);
+  --color-teal-bright: var(--teal-bright);
+  --color-cinnabar: var(--cinnabar);
+  --color-cinnabar-soft: var(--cinnabar-soft);
+  --color-gold: var(--gold);
+  --color-muted: var(--muted);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+  --font-brand: var(--font-brand);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  color: var(--ink);
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(42, 154, 164, 0.18), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(200, 60, 40, 0.1), transparent 50%),
+    linear-gradient(165deg, #eef4f5 0%, #dce9eb 42%, #cfdfe2 100%);
+  font-family: var(--font-sans), "Noto Sans SC", sans-serif;
+}
+
+::selection {
+  background: rgba(42, 154, 164, 0.28);
+}
+
+.film-grain {
+  pointer-events: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  opacity: 0.045;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.ink-wash {
+  background:
+    radial-gradient(ellipse 80% 55% at 70% 40%, rgba(31, 111, 120, 0.45), transparent 60%),
+    radial-gradient(ellipse 50% 40% at 20% 70%, rgba(12, 26, 28, 0.55), transparent 65%),
+    linear-gradient(135deg, #0f2a2e 0%, #1a454c 45%, #0c1a1c 100%);
+}
+
+.brand-mark {
+  font-family: var(--font-brand), "ZCOOL XiaoWei", serif;
+  letter-spacing: 0.08em;
+}
+
+.display {
+  font-family: var(--font-display), "Bricolage Grotesque", sans-serif;
+}
+
+@keyframes drift {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(2%, -3%, 0) scale(1.04);
+  }
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pan-x {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-drift {
+  animation: drift 14s ease-in-out infinite;
+}
+
+.animate-rise {
+  animation: rise-in 0.9s ease-out both;
+}
+
+.marquee-track {
+  animation: pan-x 28s linear infinite;
+}
+
+.panel-cut {
+  clip-path: polygon(0 0, 100% 0, 100% 92%, 88% 100%, 0 100%);
+}
+
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: var(--cinnabar);
+  color: white;
+  padding: 0.85rem 1.4rem;
+  border-radius: 0.35rem;
+  font-weight: 600;
+  transition: transform 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 10px 30px rgba(200, 60, 40, 0.22);
+}
+
+.btn-primary:hover {
+  background: var(--cinnabar-soft);
+  transform: translateY(-1px);
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  color: white;
+  padding: 0.85rem 1.35rem;
+  border-radius: 0.35rem;
+  font-weight: 500;
+  backdrop-filter: blur(6px);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+.surface {
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(10px);
+}
+
+.input-field {
+  width: 100%;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 0.4rem;
+  padding: 0.75rem 0.9rem;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-field:focus {
+  border-color: var(--teal-bright);
+  box-shadow: 0 0 0 3px rgba(42, 154, 164, 0.18);
+}
+
+.progress-bar {
+  height: 3px;
+  background: linear-gradient(90deg, var(--teal), var(--cinnabar));
+  transform-origin: left;
+}
