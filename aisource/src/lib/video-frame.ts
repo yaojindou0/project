@@ -256,6 +256,14 @@ export function isProbablyVideoUrl(url: string) {
   if (!u) return false;
   if (u.startsWith("blob:") || u.startsWith("data:video")) return true;
   if (/\/(?:api\/)?tmp-media\//i.test(u)) return true;
+  // 豆包分享页（非直链 mp4，由服务端解析）
+  if (/doubao\.com\/.*video-sharing/i.test(u)) return true;
+  if (
+    /doubao\.com/i.test(u) &&
+    (/[?&]video_id=/i.test(u) || /[?&]share_id=/i.test(u))
+  ) {
+    return true;
+  }
   return /^https?:\/\//i.test(u);
 }
 

@@ -11,6 +11,7 @@ import {
   dehydrateProjectMedia,
   deleteMedia,
   hydrateProjectMedia,
+  projectHasEphemeralMedia,
 } from "./media-db";
 export { uid } from "./id";
 
@@ -319,7 +320,17 @@ export async function loadProjectHydrated(
 ): Promise<DramaProject | null> {
   const p = loadProject(id);
   if (!p) return null;
-  return hydrateProjectMedia(p);
+  const hadEphemeral = projectHasEphemeralMedia(p);
+  const hydrated = await hydrateProjectMedia(p);
+  // 仍能拉到的 tmp-media 落进 IndexedDB，避免下次临时文件过期后裂图
+  if (hadEphemeral) {
+    try {
+      await saveProject(hydrated);
+    } catch {
+      /* ignore persist repair errors */
+    }
+  }
+  return hydrated;
 }
 
 export async function loadActiveProjectHydrated(): Promise<DramaProject | null> {

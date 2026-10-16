@@ -62,8 +62,10 @@ import { aspectClass } from "@/lib/aspect";
 import {
   buildCharacterPack,
   downloadCharacterPack,
+  mergeCharactersByName,
   readCharacterPackFile,
 } from "@/lib/character-pack";
+import { isMediaRef, toPersistentMediaUrl } from "@/lib/media-db";
 import {
   buildMergedStoryboard,
   composeVideoPrompt,
@@ -327,6 +329,42 @@ export function StudioWorkspace() {
     }));
   }
 
+  /** 写入镜头/角色媒体前，把 tmp-media 等临时链落实，避免刷新后裂图 */
+  async function persistMediaField(
+    url?: string | null,
+  ): Promise<string | undefined> {
+    if (url == null || url === "") return undefined;
+    const s = String(url);
+    return (await toPersistentMediaUrl(s)) || s;
+  }
+
+  async function updateShotMedia(shotId: string, patch: Partial<Shot>) {
+    const next: Partial<Shot> = { ...patch };
+    if ("imageUrl" in next) next.imageUrl = await persistMediaField(next.imageUrl);
+    if ("sceneImageUrl" in next) {
+      next.sceneImageUrl = await persistMediaField(next.sceneImageUrl);
+    }
+    if ("lastFrameUrl" in next) {
+      next.lastFrameUrl = await persistMediaField(next.lastFrameUrl);
+    }
+    if ("videoUrl" in next) next.videoUrl = await persistMediaField(next.videoUrl);
+    updateShot(shotId, next);
+  }
+
+  async function updateCharacterMedia(
+    index: number,
+    patch: Partial<CharacterCard>,
+  ) {
+    const next: Partial<CharacterCard> = { ...patch };
+    if ("threeViewUrl" in next) {
+      next.threeViewUrl = await persistMediaField(next.threeViewUrl);
+    }
+    if ("referenceImageUrl" in next) {
+      next.referenceImageUrl = await persistMediaField(next.referenceImageUrl);
+    }
+    updateCharacter(index, next);
+  }
+
   async function generateScript() {
     if (!settings) return;
     setScriptBusy(true);
@@ -432,7 +470,7 @@ export function StudioWorkspace() {
           [data.error || "生图失败", extra].filter(Boolean).join(" · "),
         );
       }
-      updateShot(shot.id, {
+      await updateShotMedia(shot.id, {
         imageUrl: data.imageUrl,
         status: "pending",
         usedModel: data.model,
@@ -483,7 +521,7 @@ export function StudioWorkspace() {
           [data.error || "场景图生成失败", extra].filter(Boolean).join(" · "),
         );
       }
-      updateShot(shot.id, { sceneImageUrl: data.imageUrl });
+      await updateShotMedia(shot.id, { sceneImageUrl: data.imageUrl });
       setModeHint(data.provider || data.mode);
     } catch (e) {
       setError(e instanceof Error ? e.message : "场景图生成失败");
@@ -528,7 +566,7 @@ export function StudioWorkspace() {
           [data.error || "末帧生成失败", extra].filter(Boolean).join(" · "),
         );
       }
-      updateShot(shot.id, { lastFrameUrl: data.imageUrl });
+      await updateShotMedia(shot.id, { lastFrameUrl: data.imageUrl });
       setModeHint(data.provider || data.mode);
     } catch (e) {
       setError(e instanceof Error ? e.message : "末帧生成失败");
@@ -587,9 +625,9 @@ export function StudioWorkspace() {
             : "";
         throw new Error([errMain, detail].filter(Boolean).join(" · "));
       }
-      updateCharacter(index, {
-        threeViewUrl: data.imageUrl,
-        referenceImageUrl: data.imageUrl,
+      await updateCharacterMedia(index, {
+        threeViewUrl: String(data.imageUrl || ""),
+        referenceImageUrl: String(data.imageUrl || ""),
         locked: true,
       });
       setModeHint(
@@ -855,7 +893,7 @@ export function StudioWorkspace() {
       }
 
       if (data.videoUrl) {
-        updateShot(shot.id, {
+        await updateShotMedia(shot.id, {
           videoUrl: data.videoUrl,
           status: "ready",
           error: undefined,
@@ -970,7 +1008,7 @@ export function StudioWorkspace() {
       const assistantText = String(
         data.text || (data.videoUrl ? "视频已从对话中获取" : ""),
       );
-      updateShot(shot.id, {
+      await updateShotMedia(shot.id, {
         ...(data.videoUrl
           ? {
               videoUrl: String(data.videoUrl),
@@ -1032,7 +1070,7 @@ export function StudioWorkspace() {
   ) {
     const reader = new FileReader();
     reader.onload = () => {
-      updateShot(shot.id, {
+      void updateShotMedia(shot.id, {
         [field]: String(reader.result || ""),
         status: field === "imageUrl" ? "pending" : shot.status,
         error: undefined,
@@ -1044,7 +1082,7 @@ export function StudioWorkspace() {
   function onUploadCharacterImage(index: number, file: File) {
     const reader = new FileReader();
     reader.onload = () => {
-      updateCharacter(index, {
+      void updateCharacterMedia(index, {
         referenceImageUrl: String(reader.result || ""),
         locked: true,
       });
@@ -1056,7 +1094,7 @@ export function StudioWorkspace() {
     const reader = new FileReader();
     reader.onload = () => {
       const url = String(reader.result || "");
-      updateCharacter(index, {
+      void updateCharacterMedia(index, {
         threeViewUrl: url,
         referenceImageUrl: url,
         locked: true,
@@ -1157,6 +1195,7 @@ export function StudioWorkspace() {
       let playable = resolvePlayableVideoUrl(url);
       const isHttp = /^https?:\/\//i.test(playable);
       const isLocalTmp = /\/(?:api\/)?tmp-media\//i.test(playable);
+      const isDoubaoShare = /doubao\.com\/.*video-sharing/i.test(playable);
       const sameOrigin =
         typeof window !== "undefined" &&
         isHttp &&
@@ -1164,10 +1203,16 @@ export function StudioWorkspace() {
       const isBlobOrData =
         playable.startsWith("blob:") || playable.startsWith("data:");
 
-      // 外链优先本机代理到同源
+      // 外链 / 豆包分享页：本机代理解析并下载到同源
       if (isHttp && !sameOrigin && !isLocalTmp) {
         const proxied = await proxyVideoForFrame(playable);
-        if (proxied) playable = proxied;
+        if (proxied) {
+          playable = proxied;
+        } else if (isDoubaoShare) {
+          throw new Error(
+            "无法解析豆包分享链接（需含 share_id、video_id，且链接未失效）",
+          );
+        }
       }
 
       let dataUrl: string | null = null;
@@ -1207,7 +1252,7 @@ export function StudioWorkspace() {
         throw lastError || new Error("从视频取尾帧失败");
       }
 
-      updateShot(shot.id, {
+      await updateShotMedia(shot.id, {
         imageUrl: dataUrl,
         status: "pending",
         error: undefined,
@@ -1478,13 +1523,19 @@ export function StudioWorkspace() {
   async function importAllCharacters(file: File) {
     if (!project) return;
     try {
-      const characters = await readCharacterPackFile(file);
+      const incoming = await readCharacterPackFile(file);
+      const { characters, replaced, added, kept } = mergeCharactersByName(
+        project.characters,
+        incoming,
+      );
       updateProject((prev) => ({
         ...prev,
         characters,
         updatedAt: new Date().toISOString(),
       }));
-      setError(`已导入 ${characters.length} 个角色（含图片）`);
+      setError(
+        `角色包已按名称合并：更新 ${replaced} · 新增 ${added} · 保留本机 ${kept}（共 ${characters.length}）`,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "导入角色失败");
     }
@@ -1500,6 +1551,7 @@ export function StudioWorkspace() {
       characters: project.characters,
       shots: project.shots.map((s) => ({
         index: s.index + 1,
+        duration: resolveShotDuration(s, project.durationPerShot),
         scene: s.scene,
         locationName: s.locationName,
         placeIntro: s.placeIntro,
@@ -1624,12 +1676,20 @@ export function StudioWorkspace() {
               max={15}
               className="input-field"
               value={durationPerShot}
-              onChange={(e) =>
-                setDurationPerShot(clampShotDuration(Number(e.target.value)))
-              }
+              onChange={(e) => {
+                const next = clampShotDuration(Number(e.target.value));
+                setDurationPerShot(next);
+                if (project) {
+                  updateProject((prev) => ({
+                    ...prev,
+                    durationPerShot: next,
+                    updatedAt: new Date().toISOString(),
+                  }));
+                }
+              }}
             />
             <p className="mt-1 text-[10px] text-muted">
-              新建分镜默认值；每镜可在右侧单独改
+              仅作新分镜默认；已有分镜请在列表或右侧单独改时长
             </p>
           </div>
         </div>
@@ -1944,39 +2004,68 @@ export function StudioWorkspace() {
                       />
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
-                          {c.threeViewUrl || c.referenceImageUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={c.threeViewUrl || c.referenceImageUrl}
-                              alt={c.name}
-                              referrerPolicy="no-referrer"
-                              onClick={() =>
-                                setPreviewUrl(
-                                  c.threeViewUrl || c.referenceImageUrl || null,
-                                )
-                              }
-                              className={`cursor-zoom-in rounded object-cover ${aspectClass(project.aspectRatio)} ${
-                                project.aspectRatio === "9:16"
-                                  ? "h-16 w-10"
-                                  : project.aspectRatio === "1:1"
-                                    ? "h-14 w-14"
-                                    : "h-12 w-20"
-                              }`}
-                              title="点击放大"
-                            />
-                          ) : (
-                            <div
-                              className={`flex items-center justify-center rounded bg-ink/5 text-[10px] text-muted ${
-                                project.aspectRatio === "9:16"
-                                  ? "h-16 w-10"
-                                  : project.aspectRatio === "1:1"
-                                    ? "h-14 w-14"
-                                    : "h-12 w-20"
-                              }`}
-                            >
-                              无图
-                            </div>
-                          )}
+                          {(() => {
+                            const thumbClass = `rounded object-cover ${aspectClass(project.aspectRatio)} ${
+                              project.aspectRatio === "9:16"
+                                ? "h-16 w-10"
+                                : project.aspectRatio === "1:1"
+                                  ? "h-14 w-14"
+                                  : "h-12 w-20"
+                            }`;
+                            // jingxu-media: 不能直接当 src；其余 data/http/tmp-media 可显示
+                            const pickSrc = (u?: string) =>
+                              u && !isMediaRef(u) ? u : undefined;
+                            const charImg =
+                              pickSrc(c.threeViewUrl) ||
+                              pickSrc(c.referenceImageUrl);
+                            if (charImg) {
+                              return (
+                                <>
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img
+                                    src={charImg}
+                                    alt={c.name}
+                                    referrerPolicy="no-referrer"
+                                    onClick={() => setPreviewUrl(charImg)}
+                                    className={`cursor-zoom-in ${thumbClass}`}
+                                    title="点击放大"
+                                    onError={(e) => {
+                                      const el = e.currentTarget;
+                                      el.style.display = "none";
+                                      const sib = el.nextElementSibling;
+                                      if (sib instanceof HTMLElement) {
+                                        sib.hidden = false;
+                                      }
+                                    }}
+                                  />
+                                  <div
+                                    hidden
+                                    className={`flex items-center justify-center bg-ink/5 text-[10px] text-cinnabar ${thumbClass}`}
+                                    title="图片加载失败，请重新上传/生成"
+                                  >
+                                    失效
+                                  </div>
+                                </>
+                              );
+                            }
+                            if (c.threeViewUrl || c.referenceImageUrl) {
+                              return (
+                                <div
+                                  className={`flex items-center justify-center bg-ink/5 text-[10px] text-cinnabar ${thumbClass}`}
+                                  title="图片地址无效或已失效，请重新上传/生成"
+                                >
+                                  失效
+                                </div>
+                              );
+                            }
+                            return (
+                              <div
+                                className={`flex items-center justify-center bg-ink/5 text-[10px] text-muted ${thumbClass}`}
+                              >
+                                无图
+                              </div>
+                            );
+                          })()}
                           <div className="flex flex-1 flex-wrap gap-1.5">
                             <button
                               type="button"
@@ -2119,13 +2208,40 @@ export function StudioWorkspace() {
                         镜 {activeShot.index + 1} · {activeShot.scene}
                       </p>
                       <div className="flex flex-wrap items-center gap-2">
-                        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted">
-                          本镜时长
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[11px] text-muted">本镜时长</span>
+                          <div className="flex overflow-hidden rounded-md border border-[var(--line)]">
+                            {([4, 6, 8, 10, 12, 15] as const).map((sec) => {
+                              const cur = resolveShotDuration(
+                                activeShot,
+                                project.durationPerShot,
+                              );
+                              return (
+                                <button
+                                  key={sec}
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    updateShot(activeShot.id, {
+                                      duration: sec,
+                                    })
+                                  }
+                                  className={`px-1.5 py-1 text-[10px] ${
+                                    cur === sec
+                                      ? "bg-teal text-white"
+                                      : "bg-white/80 text-muted hover:text-ink"
+                                  }`}
+                                >
+                                  {sec}s
+                                </button>
+                              );
+                            })}
+                          </div>
                           <input
                             type="number"
                             min={4}
                             max={15}
-                            className="input-field w-16 py-1 text-center text-xs"
+                            className="input-field w-14 py-1 text-center text-xs"
                             value={resolveShotDuration(
                               activeShot,
                               project.durationPerShot,
@@ -2138,9 +2254,9 @@ export function StudioWorkspace() {
                                 ),
                               })
                             }
+                            title="自定义 4–15 秒"
                           />
-                          秒
-                        </label>
+                        </div>
                         <StatusPill status={activeShot.status} />
                       </div>
                     </div>
@@ -2563,13 +2679,13 @@ export function StudioWorkspace() {
                           视频链接 → 尾帧作首帧
                         </p>
                         <p className="text-[10px] leading-relaxed text-muted">
-                          粘贴视频 URL，截取最后一帧写入本镜首帧（可与 AI
-                          生成、上传并列使用）
+                          支持豆包分享页（video-sharing）或 mp4
+                          直链；截取最后一帧写入本镜首帧
                         </p>
                         <div className="flex flex-wrap gap-1.5">
                           <input
                             className="input-field min-w-0 flex-1 text-[11px]"
-                            placeholder="https://… 视频地址"
+                            placeholder="豆包分享链接或 mp4 地址"
                             value={frameVideoUrl}
                             onChange={(e) => setFrameVideoUrl(e.target.value)}
                             disabled={frameFromVideoBusy}
@@ -2929,13 +3045,43 @@ export function StudioWorkspace() {
                       <div className="mb-1 flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold tracking-wider">
                           SHOT {String(shot.index + 1).padStart(2, "0")}
-                          <span className="ml-1.5 font-normal text-muted">
-                            ·{" "}
-                            {resolveShotDuration(shot, project.durationPerShot)}
-                            s
-                          </span>
                         </span>
-                        <StatusPill status={shot.status} />
+                        <div className="flex items-center gap-1.5">
+                          <label
+                            className="inline-flex items-center gap-0.5 text-[10px] text-muted"
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.stopPropagation()}
+                          >
+                            <select
+                              className="rounded border border-[var(--line)] bg-white px-1 py-0.5 text-[10px] text-ink"
+                              value={resolveShotDuration(
+                                shot,
+                                project.durationPerShot,
+                              )}
+                              disabled={busy}
+                              title="本镜时长（单独设置）"
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                updateShot(shot.id, {
+                                  duration: clampShotDuration(
+                                    Number(e.target.value),
+                                    project.durationPerShot,
+                                  ),
+                                });
+                              }}
+                            >
+                              {[4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map(
+                                (sec) => (
+                                  <option key={sec} value={sec}>
+                                    {sec}s
+                                  </option>
+                                ),
+                              )}
+                            </select>
+                          </label>
+                          <StatusPill status={shot.status} />
+                        </div>
                       </div>
                       <p className="line-clamp-2 text-xs text-muted">
                         {shot.dialogue ||

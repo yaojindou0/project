@@ -42,6 +42,25 @@ export function isDataUrl(url?: string | null): boolean {
   return Boolean(url?.startsWith("data:"));
 }
 
+/** 会过期/不可跨会话的地址：tmp-media、blob */
+export function isEphemeralMediaUrl(url?: string | null): boolean {
+  if (!url) return false;
+  if (url.startsWith("blob:")) return true;
+  return /\/(?:api\/)?tmp-media\//i.test(url);
+}
+
+/** 可长期携带/展示的地址（data / http(s) / 已落实的 media ref 对应的 data） */
+export function isPortableMediaUrl(url?: string | null): boolean {
+  if (!url) return false;
+  if (isMediaRef(url)) return false;
+  if (url.startsWith("blob:")) return false;
+  if (isEphemeralMediaUrl(url)) return false;
+  if (isDataUrl(url)) {
+    return url.length > 64 && /;base64,/i.test(url);
+  }
+  return /^https?:\/\//i.test(url);
+}
+
 function parseDataUrl(dataUrl: string): { mime: string; base64: string } | null {
   const m = dataUrl.match(/^data:([^;,]+)?(?:;[^,]*)?;base64,(.+)$/i);
   if (!m) return null;
@@ -50,6 +69,75 @@ function parseDataUrl(dataUrl: string): { mime: string; base64: string } | null 
 
 function toDataUrl(mime: string, base64: string) {
   return `data:${mime};base64,${base64}`;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("读取媒体失败"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function tmpMediaFetchCandidates(url: string): string[] {
+  const m = url.match(/\/(?:api\/)?tmp-media\/([^/?#]+)/i);
+  if (!m) return [url];
+  const id = m[1];
+  return [...new Set([url, `/api/tmp-media/${id}`, `/tmp-media/${id}`])];
+}
+
+async function fetchAsDataUrl(url: string): Promise<string | undefined> {
+  if (typeof fetch !== "function") return undefined;
+  const candidates = /tmp-media/i.test(url)
+    ? tmpMediaFetchCandidates(url)
+    : [url];
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(candidate);
+      if (!res.ok) continue;
+      const blob = await res.blob();
+      if (!blob.size) continue;
+      const dataUrl = await blobToDataUrl(blob);
+      if (isDataUrl(dataUrl)) return dataUrl;
+    } catch {
+      /* try next */
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 把临时/本地引用落实为可持久化的 data 或 http URL。
+ * - jingxu-media: → data
+ * - tmp-media / blob → fetch 成 data
+ * - http(s) → 尽量内嵌；失败保留原链
+ * - 无法落实的临时链 → undefined（避免继续存会裂的地址）
+ */
+export async function toPersistentMediaUrl(
+  url?: string,
+): Promise<string | undefined> {
+  if (!url) return undefined;
+  if (isDataUrl(url)) return isPortableMediaUrl(url) ? url : undefined;
+
+  if (isMediaRef(url)) {
+    return (await resolveMediaUrl(url)) || undefined;
+  }
+
+  if (isEphemeralMediaUrl(url)) {
+    return fetchAsDataUrl(url);
+  }
+
+  if (/^https?:\/\//i.test(url)) {
+    const embedded = await fetchAsDataUrl(url);
+    return embedded || url;
+  }
+
+  if (url.startsWith("/")) {
+    return fetchAsDataUrl(url);
+  }
+
+  return undefined;
 }
 
 export async function putDataUrl(dataUrl: string): Promise<string> {
@@ -125,14 +213,21 @@ type ProjectLike = {
   }[];
 };
 
-/** 写入 localStorage 前：data URL → IndexedDB 引用 */
+/** 写入 localStorage 前：临时链→data，大 data→IndexedDB 引用 */
 export async function dehydrateProjectMedia<T extends ProjectLike>(
   project: T,
 ): Promise<T> {
   const offload = async (u?: string) => {
     if (!u) return undefined;
-    if (isDataUrl(u) && u.length > 2048) return putDataUrl(u);
-    return u;
+    let next = u;
+    // 仍指向 tmp-media/blob 的，先拉成 data，否则一重启就裂
+    if (isEphemeralMediaUrl(next) || (next.startsWith("/") && !isMediaRef(next))) {
+      const persisted = await toPersistentMediaUrl(next);
+      if (!persisted) return undefined;
+      next = persisted;
+    }
+    if (isDataUrl(next) && next.length > 2048) return putDataUrl(next);
+    return next;
   };
 
   return {
@@ -151,19 +246,26 @@ export async function dehydrateProjectMedia<T extends ProjectLike>(
         sceneImageUrl: await mapUrl(s.sceneImageUrl, offload),
         imageUrl: await mapUrl(s.imageUrl, offload),
         lastFrameUrl: await mapUrl(s.lastFrameUrl, offload),
+        // 视频也可能是 tmp-media；过大时仍走 IndexedDB
         videoUrl: await mapUrl(s.videoUrl, offload),
       })),
     ),
   };
 }
 
-/** 读出后：IndexedDB 引用 → data URL（供展示与再提交） */
+/** 读出后：IndexedDB 引用 → data URL；残留 tmp-media 尽量当场修复 */
 export async function hydrateProjectMedia<T extends ProjectLike>(
   project: T,
 ): Promise<T> {
   const load = async (u?: string) => {
     if (!u) return undefined;
-    if (isMediaRef(u)) return (await resolveMediaUrl(u)) || u;
+    if (isMediaRef(u)) {
+      return (await resolveMediaUrl(u)) || undefined;
+    }
+    if (isEphemeralMediaUrl(u) || (u.startsWith("/") && !/^https?:/i.test(u))) {
+      // 临时文件还在则转成 data，方便展示；下次 save 会进 IndexedDB
+      return (await toPersistentMediaUrl(u)) || undefined;
+    }
     return u;
   };
 
@@ -206,4 +308,30 @@ export async function collectMediaRefs(project: ProjectLike): Promise<string[]> 
     add(s.videoUrl);
   }
   return refs;
+}
+
+function mediaFields(project: ProjectLike): (string | undefined)[] {
+  return [
+    project.coverUrl,
+    ...project.characters.flatMap((c) => [
+      c.referenceImageUrl,
+      c.threeViewUrl,
+    ]),
+    ...project.shots.flatMap((s) => [
+      s.sceneImageUrl,
+      s.imageUrl,
+      s.lastFrameUrl,
+      s.videoUrl,
+    ]),
+  ];
+}
+
+/** 项目里是否还挂着会过期的临时媒体地址 */
+export function projectHasEphemeralMedia(project: ProjectLike): boolean {
+  return mediaFields(project).some(
+    (u) =>
+      !!u &&
+      (isEphemeralMediaUrl(u) ||
+        (u.startsWith("/") && !isMediaRef(u) && !/^https?:/i.test(u))),
+  );
 }
