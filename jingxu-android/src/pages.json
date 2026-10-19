@@ -1,0 +1,34 @@
+{
+  "pages": [
+    {
+      "path": "pages/studio/index",
+      "style": {
+        "navigationBarTitleText": "创作台",
+        "navigationBarBackgroundColor": "#eef4f5",
+        "navigationBarTextStyle": "black"
+      }
+    },
+    {
+      "path": "pages/gallery/index",
+      "style": {
+        "navigationBarTitleText": "成片库",
+        "navigationBarBackgroundColor": "#eef4f5",
+        "navigationBarTextStyle": "black"
+      }
+    },
+    {
+      "path": "pages/settings/index",
+      "style": {
+        "navigationBarTitleText": "接入设置",
+        "navigationBarBackgroundColor": "#eef4f5",
+        "navigationBarTextStyle": "black"
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "镜叙",
+    "navigationBarBackgroundColor": "#eef4f5",
+    "backgroundColor": "#eef4f5"
+  }
+}
