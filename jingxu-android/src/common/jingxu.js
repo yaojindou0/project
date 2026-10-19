@@ -249,16 +249,17 @@ function defaultEndpoints() {
   const base = resolveApiBaseFromWindow();
   const DOUBAO = "https://www.doubao.com";
   const online = (origin, p) => (base ? base + p : origin + p);
+  const ARK = "https://ark.cn-beijing.volces.com";
   return {
     script: online(DOUBAO, "/samantha/chat/completion"),
-    enrich: "https://chatcompletion.1666976842.workers.dev/",
-    chatReply: "https://chatcompletion.1666976842.workers.dev/",
-    image: "https://imagesgenerations.1666976842.workers.dev/",
-    video: "https://chatcompletion2.1666976842.workers.dev/",
-    videoArk: "https://generationstasks.1666976842.workers.dev/",
-    authSendCode: "https://sendcode.1666976842.workers.dev/",
-    authLogin: "https://smslogin.1666976842.workers.dev/",
-    authCheckSession: "https://doubao-proxy.1666976842.workers.dev/",
+    enrich: base ? base + "/samantha/chat/enrich" : DOUBAO + "/samantha/chat/completion",
+    chatReply: base ? base + "/samantha/chat/reply" : DOUBAO + "/samantha/chat/completion",
+    image: online(ARK, "/api/v3/images/generations"),
+    video: online(DOUBAO, "/chat/completion"),
+    videoArk: online(ARK, "/api/v3/contents/generations/tasks"),
+    authSendCode: online(DOUBAO, "/passport/web/send_code/"),
+    authLogin: online(DOUBAO, "/passport/web/sms_login/"),
+    authCheckSession: online(DOUBAO, "/passport/account/info/v2/"),
     mediaBase: base || DOUBAO,
   };
 }

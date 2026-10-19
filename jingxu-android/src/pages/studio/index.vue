@@ -83,7 +83,7 @@
             <image
               v-if="c.threeViewUrl || c.referenceImageUrl"
               class="char-thumb"
-              :src="c.threeViewUrl || c.referenceImageUrl"
+              :src="mediaSrc(c.threeViewUrl || c.referenceImageUrl)"
               mode="aspectFill"
             />
             <view v-else class="char-placeholder">
@@ -201,9 +201,9 @@
                 v-if="slot.url"
                 class="frame-preview"
                 :class="'ratio-' + (project.aspectRatio || '9:16').replace(':', '-')"
-                :src="slot.url"
+                :src="mediaSrc(slot.url)"
                 mode="aspectFill"
-                @click="preview(slot.url)"
+                @click="preview(mediaSrc(slot.url))"
               />
               <view
                 v-else
@@ -475,6 +475,18 @@ export default {
       setActiveProjectId(this.project.id);
       this.persist();
       return this.project;
+    },
+    mediaSrc(url) {
+      if (!url) return "";
+      if (/^(https?:|data:|blob:|file:)/i.test(url)) return url;
+      if (url.startsWith("/")) {
+        // #ifdef H5
+        if (typeof location !== "undefined" && location.origin) {
+          return `${location.origin}${url}`;
+        }
+        // #endif
+      }
+      return url;
     },
     statusLabel(s) {
       return STATUS_LABEL[s] || s;

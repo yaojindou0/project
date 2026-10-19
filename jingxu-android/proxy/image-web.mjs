@@ -2,6 +2,8 @@
  * 豆包网页 Seedream 生图（skill_type=3 / content_type=2009），对齐 PC doubaoWebGenerateImage。
  */
 
+import https from "node:https";
+import http from "node:http";
 import { digits, pickDoubaoAccount, uuid } from "./doubao-chat.mjs";
 import { putTmpMedia } from "./tmp-media.mjs";
 
@@ -91,12 +93,11 @@ function throwIfRate(raw) {
 }
 
 function looksLikeImageUrl(u) {
+  if (!/^https?:\/\//i.test(u)) return false;
+  if (/samantha|passport|completion|account\/info/i.test(u)) return false;
   return (
-    /^https?:\/\//i.test(u) &&
-    (/\.(png|jpe?g|webp|gif|bmp)(\?|$|~)/i.test(u) ||
-      /tplv|~tplv|image|byteimg|imagex|douyinpic|snssdk|ivolces|doubao|rc_gen_image/i.test(
-        u,
-      ))
+    /\.(png|jpe?g|webp|gif|bmp|avif)(\?|$|~)/i.test(u) ||
+    /tplv|byteimg|imagex|douyinpic|ivolces|rc_gen_image|tos-cn-i-/i.test(u)
   );
 }
 
@@ -138,6 +139,28 @@ function collectUrlsDeep(node, out, depth = 0) {
   }
 }
 
+function pickImageUrl(item) {
+  if (!item || typeof item !== "object") return "";
+  const nested = (key) => {
+    const o = item[key];
+    if (o && typeof o === "object" && typeof o.url === "string") return o.url;
+    return "";
+  };
+  return (
+    nested("image_ori") ||
+    nested("image_raw") ||
+    nested("image_preview") ||
+    nested("image_thumb") ||
+    (typeof item.url === "string" ? item.url : "") ||
+    (typeof item.image_url === "string" ? item.image_url : "")
+  );
+}
+
+function pushUrl(urls, u) {
+  const cleaned = cleanImageUrl(u);
+  if (looksLikeImageUrl(cleaned) && !urls.includes(cleaned)) urls.push(cleaned);
+}
+
 function parseImageUrls(raw) {
   throwIfRate(raw);
   const urls = [];
@@ -145,42 +168,162 @@ function parseImageUrls(raw) {
     if (!line.startsWith("data:")) continue;
     const data = line.slice(5).trimStart();
     if (!data || data === "[DONE]") continue;
+    let ev;
     try {
-      const ev = JSON.parse(data);
-      let inner = ev.event_data;
-      if (typeof inner === "string") {
-        try {
-          inner = JSON.parse(inner);
-        } catch {
-          collectUrlsDeep(inner, urls);
-          continue;
-        }
-      }
-      if (inner) collectUrlsDeep(inner, urls);
-      collectUrlsDeep(ev, urls);
+      ev = JSON.parse(data);
     } catch {
-      collectUrlsDeep(data, urls);
+      continue;
     }
+    let inner = ev.event_data;
+    if (typeof inner === "string") {
+      try {
+        inner = JSON.parse(inner);
+      } catch {
+        inner = null;
+      }
+    }
+    const msg = inner?.message;
+    if (msg?.content) {
+      try {
+        const payload = JSON.parse(msg.content);
+        const ct = Number(msg.content_type);
+        if (ct === 2010) {
+          const list = Array.isArray(payload.data)
+            ? payload.data
+            : payload.data
+              ? [payload.data]
+              : Array.isArray(payload.images)
+                ? payload.images
+                : [];
+          for (const item of list) pushUrl(urls, pickImageUrl(item));
+        } else if (ct === 2074) {
+          for (const c of payload.creations || []) {
+            pushUrl(urls, pickImageUrl(c?.image || c));
+          }
+        } else {
+          collectUrlsDeep(payload, urls);
+        }
+      } catch {
+        collectUrlsDeep(msg.content, urls);
+      }
+    }
+    if (inner) collectUrlsDeep(inner, urls);
   }
-  // 整包兜底
-  collectUrlsDeep(raw, urls);
-  return urls;
+  if (!urls.length) {
+    const text = String(raw)
+      .replace(/\\\//g, "/")
+      .replace(/\\u0026/gi, "&");
+    collectUrlsDeep(text, urls);
+  }
+  return urls.sort((a, b) => scoreImageUrl(b) - scoreImageUrl(a));
 }
 
-function pickBestImageUrl(urls) {
-  const expanded = [];
-  for (const u of urls) {
-    const cleaned = u
-      .replace(/\\u0026/gi, "&")
-      .replace(/&amp;/gi, "&")
-      .replace(/\\\//g, "/")
-      .trim();
-    if (!looksLikeImageUrl(cleaned)) continue;
-    if (!expanded.includes(cleaned)) expanded.push(cleaned);
+function cleanImageUrl(u) {
+  return String(u || "")
+    .replace(/\\u0026/gi, "&")
+    .replace(/&amp;/gi, "&")
+    .replace(/\\\//g, "/")
+    .replace(/\\+$/g, "")
+    .trim();
+}
+
+function sniffImage(buf, ct) {
+  if (!buf || buf.length < 32) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8) return "image/jpeg";
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return "image/png";
   }
-  if (!expanded.length) return undefined;
-  expanded.sort((a, b) => scoreImageUrl(b) - scoreImageUrl(a));
-  return expanded[0];
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return "image/gif";
+  if (
+    buf.length > 12 &&
+    buf.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buf.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  const brand = buf.length > 16 ? buf.subarray(4, 12).toString("ascii") : "";
+  if (/ftyp/.test(brand)) return "image/avif";
+  const type = String(ct || "").toLowerCase().split(";")[0].trim();
+  if (type.startsWith("image/") && !type.includes("svg")) return type;
+  return null;
+}
+
+function upgradeByteimgUrl(u) {
+  const out = [u];
+  const m = u.match(/^(https?:\/\/[^?]+?)~tplv-[^?]+\.(?:png|jpe?g|webp|avif)(\?.*)?$/i);
+  if (m) {
+    const bare = m[1] + (m[2] || "");
+    if (!out.includes(bare)) out.push(bare);
+    const ori = `${m[1]}~tplv-a9rns2rl98-image.jpeg${m[2] || ""}`;
+    if (!out.includes(ori)) out.push(ori);
+  }
+  return out;
+}
+
+function requestImage(url, headers, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith("http:") ? http : https;
+    const req = lib.get(url, { headers, timeout: 60_000 }, (res) => {
+      const status = res.statusCode || 0;
+      if (status >= 300 && status < 400 && res.headers.location && redirects < 4) {
+        const next = new URL(res.headers.location, url).href;
+        res.resume();
+        requestImage(next, headers, redirects + 1).then(resolve, reject);
+        return;
+      }
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        resolve({
+          status,
+          ct: String(res.headers["content-type"] || ""),
+          buf: Buffer.concat(chunks),
+        });
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("拉图超时")));
+    req.on("error", reject);
+  });
+}
+
+async function fetchImageBytes(url, sessionId, cookieHeader) {
+  const headerSets = [
+    {
+      Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      Referer: `${BASE}/`,
+      "User-Agent": FAKE_HEADERS["User-Agent"],
+    },
+    {
+      Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      Referer: `${BASE}/chat/`,
+      "User-Agent": FAKE_HEADERS["User-Agent"],
+    },
+    {
+      Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+      Referer: `${BASE}/chat/`,
+      Cookie: cookieFor(sessionId, cookieHeader),
+      "User-Agent": FAKE_HEADERS["User-Agent"],
+    },
+  ];
+  let last = "无响应";
+  for (const headers of headerSets) {
+    try {
+      const res = await requestImage(url, headers);
+      const mime = res.status >= 200 && res.status < 300 ? sniffImage(res.buf, res.ct) : null;
+      if (mime) return { buf: res.buf, mime };
+      let host = "bad-url";
+      try {
+        host = new URL(url).host;
+      } catch {
+        /* keep */
+      }
+      const signed = /x-signature=|sign=/i.test(url) ? "有签名" : "无签名";
+      last = `HTTP ${res.status} ${res.ct || "无类型"} ${host} ${signed} ${res.buf.length}B`;
+    } catch (e) {
+      last = e instanceof Error ? e.message : "请求失败";
+    }
+  }
+  return { error: last };
 }
 
 function extractAsyncTaskId(raw) {
@@ -243,38 +386,24 @@ async function pollAsync(sessionId, cookieHeader, taskId, timeoutMs) {
   return text;
 }
 
-/** 带 Cookie 拉图转 data URL，避免 H5 防盗链空白；过大则退回原链 */
-async function materialize(sessionId, cookieHeader, remoteUrl) {
-  try {
-    const res = await fetch(remoteUrl, {
-      headers: {
-        Accept: "image/avif,image/webp,image/*,*/*;q=0.8",
-        Referer: `${BASE}/chat/`,
-        Cookie: cookieFor(sessionId, cookieHeader),
-        "User-Agent": FAKE_HEADERS["User-Agent"],
-      },
-      signal: AbortSignal.timeout(60_000),
-      redirect: "follow",
-    });
-    if (!res.ok) return remoteUrl;
-    const ct = (res.headers.get("content-type") || "").toLowerCase();
-    if (ct.includes("json") || ct.includes("text/html")) return remoteUrl;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 64 || buf.length > 3_500_000) return remoteUrl;
-    const head = buf.subarray(0, 4);
-    const isJpeg = head[0] === 0xff && head[1] === 0xd8;
-    const isPng =
-      head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
-    const isWebp =
-      buf.length > 12 &&
-      buf.subarray(0, 4).toString("ascii") === "RIFF" &&
-      buf.subarray(8, 12).toString("ascii") === "WEBP";
-    if (!isJpeg && !isPng && !isWebp) return remoteUrl;
-    const mime = isJpeg ? "image/jpeg" : isPng ? "image/png" : "image/webp";
-    return `data:${mime};base64,${buf.toString("base64")}`;
-  } catch {
-    return remoteUrl;
+/** 依次尝试全部图链，落盘为同源 /tmp-media/:id */
+async function materialize(sessionId, cookieHeader, urls) {
+  const list = [];
+  for (const raw of urls) {
+    const cleaned = cleanImageUrl(raw);
+    if (!looksLikeImageUrl(cleaned)) continue;
+    for (const u of upgradeByteimgUrl(cleaned)) {
+      if (!list.includes(u)) list.push(u);
+    }
   }
+  list.sort((a, b) => scoreImageUrl(b) - scoreImageUrl(a));
+  let last = "没有可拉取的图片地址";
+  for (const url of list.slice(0, 8)) {
+    const got = await fetchImageBytes(url, sessionId, cookieHeader);
+    if (got.buf) return putTmpMedia(got.buf, got.mime);
+    last = got.error || last;
+  }
+  throw new Error(`豆包图片拉取失败（${last}）。请再试一次`);
 }
 
 export async function doubaoWebGenerateImage({
@@ -343,13 +472,12 @@ export async function doubaoWebGenerateImage({
     }
   }
 
-  const best = pickBestImageUrl(urls);
-  if (!best) {
+  if (!urls.length) {
     throw new Error(
       `豆包网页生图未返回图片（上游 ${raw.length} 字：${raw.replace(/\s+/g, " ").slice(0, 140)}）`,
     );
   }
-  const imageUrl = await materialize(sid, cookieHeader, best);
+  const imageUrl = await materialize(sid, cookieHeader, urls);
   return { imageUrl, model: "seedream-4.5:web" };
 }
 

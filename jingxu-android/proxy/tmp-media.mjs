@@ -14,6 +14,7 @@ function extFromMime(mime) {
   if (m.includes("png")) return "png";
   if (m.includes("webp")) return "webp";
   if (m.includes("gif")) return "gif";
+  if (m.includes("avif")) return "avif";
   return "bin";
 }
 
@@ -22,6 +23,7 @@ function mimeFromExt(ext) {
   if (ext === "png") return "image/png";
   if (ext === "webp") return "image/webp";
   if (ext === "gif") return "image/gif";
+  if (ext === "avif") return "image/avif";
   return "application/octet-stream";
 }
 

@@ -9,6 +9,7 @@ import { runEnrichUpstream } from "./proxy/enrich-upstream.mjs";
 import { runImageUpstream } from "./proxy/image-upstream.mjs";
 import { runAuthCheckUpstream } from "./proxy/auth-upstream.mjs";
 import { runChatReplyUpstream } from "./proxy/chat-reply-upstream.mjs";
+import { getTmpMedia } from "./proxy/tmp-media.mjs";
 
 const localConfig = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -243,7 +244,28 @@ function jingxuConfig() {
     res.setHeader("Content-Type", "application/javascript; charset=utf-8");
     fs.createReadStream(localConfig).pipe(res);
   };
+  const tmpMedia = () => async (req, res, next) => {
+    const pathname = (req.url || "").split("?")[0];
+    const m = pathname.match(/^\/(?:api\/)?tmp-media\/([a-zA-Z0-9]+)$/);
+    if (!m || req.method !== "GET") return next();
+    try {
+      const media = await getTmpMedia(m[1]);
+      if (!media) {
+        res.statusCode = 404;
+        res.end("not found");
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", media.mime);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.end(media.bytes);
+    } catch (e) {
+      res.statusCode = 500;
+      res.end(e instanceof Error ? e.message : "media error");
+    }
+  };
   const useAll = (server) => {
+    server.middlewares.use(tmpMedia());
     server.middlewares.use(scriptUpstreamMiddleware());
     server.middlewares.use(enrichUpstreamMiddleware());
     server.middlewares.use(chatReplyUpstreamMiddleware());
