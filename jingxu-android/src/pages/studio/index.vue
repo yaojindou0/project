@@ -339,13 +339,7 @@
               <view class="doubao-logo">豆</view>
               <view class="doubao-chat-titles">
                 <text class="doubao-chat-title">豆包</text>
-                <text class="doubao-chat-sub">
-                  {{
-                    activeShot.videoChat.matchedCharacterNames?.length
-                      ? `视频对话 · ${activeShot.videoChat.matchedCharacterNames.join("、")}`
-                      : "视频对话"
-                  }}
-                </text>
+                <text class="doubao-chat-sub">{{ doubaoChatSubtitle(activeShot) }}</text>
               </view>
             </view>
           </view>
@@ -556,13 +550,7 @@
               <view class="doubao-logo">豆</view>
               <view class="doubao-chat-titles">
                 <text class="doubao-chat-title">豆包</text>
-                <text class="doubao-chat-sub">
-                  {{
-                    boardFocusShot.videoChat.matchedCharacterNames?.length
-                      ? `镜${(boardFocusShot.index || 0) + 1} · ${boardFocusShot.videoChat.matchedCharacterNames.join("、")}`
-                      : `镜${(boardFocusShot.index || 0) + 1} · 视频对话`
-                  }}
-                </text>
+                <text class="doubao-chat-sub">{{ doubaoChatSubtitle(boardFocusShot) }}</text>
               </view>
             </view>
           </view>
@@ -2141,15 +2129,32 @@ export default {
         await this.generateShotVideo(again, this.variant);
       }
     },
+    doubaoChatSubtitle(shot) {
+      const names = shot?.videoChat?.matchedCharacterNames || [];
+      const conv =
+        resolveProjectConversationId(this.project, this.settings) ||
+        shot?.videoChat?.conversationId ||
+        "";
+      const sync = conv
+        ? `已同步豆包 · …${String(conv).slice(-6)}`
+        : "未绑定豆包对话（请先出片）";
+      if (names.length) return `${sync} · ${names.join("、")}`;
+      return sync;
+    },
     async replyVideoChat(shot) {
       const text = (this.chatDraft || "").trim();
       if (!text) return;
-      this.chatReplyBusy = true;
-      this.chatDraft = "";
       const conversationId =
         resolveProjectConversationId(this.project, this.settings) ||
         shot.videoChat?.conversationId ||
         "";
+      if (!conversationId || conversationId === "0") {
+        this.error =
+          "尚未绑定豆包对话窗。请先生成一次视频，之后的问答才会同步到同一豆包对话。";
+        return;
+      }
+      this.chatReplyBusy = true;
+      this.chatDraft = "";
       const userMsg = { id: uid("vchat"), role: "user", text, at: new Date().toISOString() };
       this.patchShot(shot.id, {
         videoChat: {

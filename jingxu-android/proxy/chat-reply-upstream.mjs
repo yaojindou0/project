@@ -1,20 +1,19 @@
 /**
  * 安卓开发代理：与 PC chat-reply 一致。
- * - 已有视频对话窗 → 视频能力续聊（可捞 videoUrl / 自动「确定」）
- * - 否则 → 新开普通对话
+ * 必须在已绑定的视频对话窗续聊，保证问答同步到该豆包账号同一聊天。
  */
 
-import { doubaoWebChatText, resolveDoubaoAuth } from "./doubao-chat.mjs";
+import { resolveDoubaoAuth } from "./doubao-chat.mjs";
 import { runContinueVideoUpstream } from "./video-upstream.mjs";
 
-export async function runChatReplyUpstream(body, chatUrl) {
+export async function runChatReplyUpstream(body, _chatUrl) {
   const message = String(body?.message || body?.prompt || "").trim();
   if (!message) {
     const err = new Error("缺少消息内容");
     err.status = 400;
     throw err;
   }
-  const { account, sessionId, cookieHeader } = resolveDoubaoAuth(body.settings);
+  const { account, sessionId } = resolveDoubaoAuth(body.settings);
   if (!sessionId) {
     const err = new Error("请先在设置里登录豆包，或粘贴网页 session");
     err.status = 400;
@@ -26,32 +25,20 @@ export async function runChatReplyUpstream(body, chatUrl) {
     String(account?.conversationId || "").trim() ||
     "";
 
-  // 与 PC 一致：已有视频对话窗走 ability 17 续聊
-  if (threadId && threadId !== "0") {
-    return runContinueVideoUpstream({
-      message,
-      conversationId: threadId,
-      aspectRatio: body.aspectRatio,
-      duration: body.duration,
-      variant: body.variant,
-      settings: body.settings,
-    });
+  if (!threadId || threadId === "0") {
+    const err = new Error(
+      "尚未绑定豆包对话窗。请先生成一次视频，之后的问答才会同步到同一豆包对话。",
+    );
+    err.status = 400;
+    throw err;
   }
 
-  const context = String(body?.context || "").trim();
-  const user = context
-    ? `【分镜上下文】\n${context.slice(0, 800)}\n\n【用户】\n${message}`
-    : message;
-  const system =
-    String(body?.system || "").trim() ||
-    "你是豆包视频创作助手。用户在继续刚才的视频生成对话。简洁有用地回复，必要时说明如何改提示词或参考图。";
-  const answer = await doubaoWebChatText({
-    sessionId,
-    cookieHeader,
-    chatUrl,
-    system,
-    user,
-    jsonMode: false,
+  return runContinueVideoUpstream({
+    message,
+    conversationId: threadId,
+    aspectRatio: body.aspectRatio,
+    duration: body.duration,
+    variant: body.variant,
+    settings: body.settings,
   });
-  return { text: answer, reply: answer, chatText: answer };
 }
