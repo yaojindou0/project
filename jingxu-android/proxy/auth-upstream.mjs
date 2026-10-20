@@ -1,8 +1,8 @@
 /**
- * 安卓开发代理：校验豆包 session（对齐 PC auth/check-session 语义）。
+ * 安卓开发代理：校验豆包 session（对齐 PC /api/auth/check-session 返回形态）。
  */
 
-import { digits, pickDoubaoAccount, uuid } from "./doubao-chat.mjs";
+import { digits, uuid } from "./doubao-chat.mjs";
 
 function hashHex(text) {
   let h1 = 0x811c9dc5;
@@ -35,22 +35,21 @@ function profileOf(sessionId) {
 }
 
 export async function runAuthCheckUpstream(body, checkUrl) {
-  const account = pickDoubaoAccount(body?.settings);
-  const sessionId = String(
-    account?.sessionId || body?.sessionId || body?.settings?.doubaoSessionId || "",
-  ).trim();
-  const cookieHeader = String(
-    account?.cookie || body?.cookie || body?.settings?.doubaoCookie || "",
-  ).trim();
+  const sessionId = String(body?.sessionId || "").trim();
+  const cookieHeader = String(body?.cookie || body?.cookieHeader || "").trim();
+  const platform = String(body?.platform || "doubao");
+  const label = String(body?.label || "").trim();
+
   if (!sessionId) {
-    return { ok: false, error: "缺少 session" };
+    return { ok: false, error: "缺少 sessionid" };
   }
+
   const cookie =
     cookieHeader || `sessionid=${sessionId}; sessionid_ss=${sessionId}`;
   const profile = profileOf(sessionId);
   const target = new URL(checkUrl);
   const qs = new URLSearchParams({
-    aid: "497858",
+    aid: platform === "doubao" ? "497858" : "513695",
     account_sdk_source: "web",
     sdk_version: "2.1.7",
     language: "zh",
@@ -61,6 +60,7 @@ export async function runAuthCheckUpstream(body, checkUrl) {
   });
   target.search = target.search ? `${target.search}&${qs}` : `?${qs}`;
 
+  const started = Date.now();
   try {
     const res = await fetch(target, {
       method: "GET",
@@ -79,21 +79,55 @@ export async function runAuthCheckUpstream(body, checkUrl) {
     try {
       data = JSON.parse(text);
     } catch {
-      data = { raw: text.slice(0, 200) };
+      data = null;
     }
-    const ok =
-      res.ok &&
-      (data?.data?.user_id ||
-        data?.data?.name ||
-        data?.user_id ||
-        data?.message === "success" ||
-        Number(data?.error_code) === 0);
+    const errCode = Number(data?.error_code ?? data?.code ?? NaN);
+    const desc = String(
+      data?.description || data?.message || data?.error || "",
+    );
+    const nameRaw =
+      data?.data?.name ||
+      data?.data?.user_name ||
+      data?.data?.screen_name ||
+      "";
+    const name =
+      typeof nameRaw === "string" && !/error|invalid|fail/i.test(nameRaw)
+        ? nameRaw
+        : "";
+    const userId = data?.data?.user_id || data?.user_id;
+    const looksFail =
+      !res.ok ||
+      (Number.isFinite(errCode) && errCode !== 0) ||
+      /error|invalid|过期|失效|未登录/i.test(desc) ||
+      /error|invalid/i.test(String(nameRaw));
+    const ok = !looksFail && Boolean(userId || name);
+
+    if (!ok) {
+      return {
+        ok: false,
+        error:
+          desc ||
+          (Number.isFinite(errCode) ? `error_code=${errCode}` : "") ||
+          `session 无效或已过期（HTTP ${res.status}）`,
+        ms: Date.now() - started,
+        platform,
+      };
+    }
+
+    const baseMsg = name ? `已验证：${name}` : "session 有效";
     return {
-      ok: Boolean(ok),
-      status: res.status,
-      data,
+      ok: true,
+      message: label ? `${baseMsg} · ${label}` : baseMsg,
+      name: name || undefined,
+      ms: Date.now() - started,
+      platform,
     };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "校验失败" };
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "校验失败",
+      ms: Date.now() - started,
+      platform,
+    };
   }
 }

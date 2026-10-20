@@ -72,7 +72,8 @@
 
     <view class="card">
       <text class="label">粘贴 session / Cookie</text>
-      <textarea class="area" maxlength="-1" v-model="sessionPaste" placeholder="sessionid=... 或浏览器整段 Cookie" />
+      <text class="hint">出片请粘贴浏览器整段 Cookie（含 sessionid、ttwid、msToken）。只贴 sessionid 也能用，但视频更容易失败。</text>
+      <textarea class="area" maxlength="-1" v-model="sessionPaste" placeholder="从 doubao.com 开发者工具复制整段 Cookie" />
       <button class="ghost" :disabled="pasting" @click="pasteSession">校验并保存</button>
     </view>
 
@@ -94,7 +95,10 @@
           <text>{{ platformName(a.platform) }} · {{ a.label }}</text>
           <switch :checked="a.enabled" @change="a.enabled = $event.detail.value" />
         </view>
-        <text class="hint">{{ a.phone ? maskPhone(a.phone) + " · " : "" }}{{ a.sessionId ? "已有 session" : "无 session" }}</text>
+        <text class="hint">
+          {{ a.phone ? maskPhone(a.phone) + " · " : "" }}{{ a.sessionId ? "已有 session" : "无 session" }}
+          · {{ cookieLabel(a) }}
+        </text>
         <view class="row">
           <button class="chip" :class="{ on: settings.activeAccountId === a.id }" @click="selectAccount(a.id)">当前使用</button>
           <button class="chip" @click="checkAccount(a)">检测</button>
@@ -130,6 +134,7 @@ import {
   applyProviderPreset,
   buildAccessPack,
   downloadAccessPack,
+  accountHasFullCookie,
   extractCookieHeader,
   extractSessionId,
   loadSettings,
@@ -275,12 +280,21 @@ export default {
           loginAt: new Date().toISOString(),
         });
         this.sessionPaste = "";
-        this.authMsg = data.message || "session 已写入";
+        if (cookieHeader && accountHasFullCookie({ cookieHeader })) {
+          this.authMsg = (data.message || "已写入") + " · 已保存完整 Cookie，出片更稳";
+        } else {
+          this.authMsg =
+            (data.message || "session 已写入") +
+            " · 建议再粘贴浏览器整段 Cookie（含 ttwid），否则视频易失败";
+        }
       } catch (e) {
         this.authErr = toastErr(e, "校验失败");
       } finally {
         this.pasting = false;
       }
+    },
+    cookieLabel(a) {
+      return accountHasFullCookie(a) ? "完整 Cookie" : "仅 session（出片易失败）";
     },
     selectAccount(id) {
       const acc = this.settings.jimengAccounts.find((a) => a.id === id);

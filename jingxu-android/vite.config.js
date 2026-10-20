@@ -9,6 +9,12 @@ import { runEnrichUpstream } from "./proxy/enrich-upstream.mjs";
 import { runImageUpstream } from "./proxy/image-upstream.mjs";
 import { runAuthCheckUpstream } from "./proxy/auth-upstream.mjs";
 import { runChatReplyUpstream } from "./proxy/chat-reply-upstream.mjs";
+import { runVideoUpstream } from "./proxy/video-upstream.mjs";
+import { runFrameFromVideo } from "./proxy/frame-from-video.mjs";
+import {
+  runAuthLoginUpstream,
+  runAuthSendCodeUpstream,
+} from "./proxy/auth-sms-upstream.mjs";
 import { getTmpMedia } from "./proxy/tmp-media.mjs";
 
 const localConfig = path.resolve(
@@ -57,19 +63,8 @@ function proxyExact(targetUrl) {
 
 function buildProxy() {
   const ep = loadEndpoints();
-  // script / enrich / chat-reply / image / auth-check 由中间件处理
-  const pairs = [
-    ["/api/video", ep.video],
-    ["/video", ep.video],
-    ["/chat/completion", ep.video],
-    ["/api/v3/contents/generations/tasks", ep.videoArk],
-    ["/api/auth/send-code", ep.authSendCode],
-    ["/auth/send-code", ep.authSendCode],
-    ["/passport/web/send_code", ep.authSendCode],
-    ["/api/auth/login", ep.authLogin],
-    ["/auth/login", ep.authLogin],
-    ["/passport/web/sms_login", ep.authLogin],
-  ];
+  // 创作台相关接口均由中间件处理；仅保留方舟视频任务等可选裸转发
+  const pairs = [["/api/v3/contents/generations/tasks", ep.videoArk]];
   return Object.fromEntries(
     pairs
       .filter(([, url]) => typeof url === "string" && /^https?:\/\//i.test(url))
@@ -204,6 +199,100 @@ function imageUpstreamMiddleware() {
   };
 }
 
+/** 视频：创作台 JSON → 豆包官网视频协议 → JSON */
+function videoUpstreamMiddleware() {
+  return async (req, res, next) => {
+    const pathname = (req.url || "").split("?")[0];
+    if (
+      req.method !== "POST" ||
+      !matchAny(pathname, ["/api/video", "/video", "/chat/completion"])
+    ) {
+      return next();
+    }
+    // /chat/completion 也可能被其它用途占用；仅处理带 prompt+settings 的创作台体
+    try {
+      const raw = await readBody(req);
+      const body = JSON.parse(raw.toString("utf8") || "{}");
+      if (
+        pathname === "/chat/completion" &&
+        !(body?.settings && (body?.prompt || body?.message))
+      ) {
+        return next();
+      }
+      const data = await runVideoUpstream(body);
+      sendJson(res, 200, data);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "视频代理失败";
+      const status = /频繁|限流|710022/.test(msg) ? 429 : e?.status || 500;
+      sendJson(res, status, { error: msg });
+    }
+  };
+}
+
+/** 短信发码 / 登录：明确提示改用粘贴 session */
+function authSmsUpstreamMiddleware() {
+  return async (req, res, next) => {
+    const pathname = (req.url || "").split("?")[0];
+    if (req.method !== "POST") return next();
+    try {
+      if (
+        matchAny(pathname, [
+          "/api/auth/send-code",
+          "/auth/send-code",
+          "/passport/web/send_code",
+        ])
+      ) {
+        await readBody(req);
+        await runAuthSendCodeUpstream();
+        return;
+      }
+      if (
+        matchAny(pathname, [
+          "/api/auth/login",
+          "/auth/login",
+          "/passport/web/sms_login",
+        ])
+      ) {
+        await readBody(req);
+        await runAuthLoginUpstream();
+        return;
+      }
+    } catch (e) {
+      sendJson(res, e?.status || 500, {
+        ok: false,
+        error: e instanceof Error ? e.message : "登录代理失败",
+      });
+      return;
+    }
+    return next();
+  };
+}
+
+/** 远程视频 → 同源 /tmp-media（截尾帧） */
+function frameFromVideoMiddleware() {
+  return async (req, res, next) => {
+    const pathname = (req.url || "").split("?")[0];
+    if (
+      req.method !== "POST" ||
+      !matchAny(pathname, ["/api/frame-from-video", "/frame-from-video"])
+    ) {
+      return next();
+    }
+    try {
+      const raw = await readBody(req);
+      const body = JSON.parse(raw.toString("utf8") || "{}");
+      const data = await runFrameFromVideo(body);
+      sendJson(res, 200, data);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "拉取视频失败";
+      const status = /过大/.test(msg)
+        ? 413
+        : e?.status || (/失败|不像|不是|解析/.test(msg) ? 502 : 500);
+      sendJson(res, status, { error: msg });
+    }
+  };
+}
+
 /** 校验 session：创作台 JSON → config.js authCheckSession */
 function authCheckUpstreamMiddleware() {
   return async (req, res, next) => {
@@ -270,6 +359,9 @@ function jingxuConfig() {
     server.middlewares.use(enrichUpstreamMiddleware());
     server.middlewares.use(chatReplyUpstreamMiddleware());
     server.middlewares.use(imageUpstreamMiddleware());
+    server.middlewares.use(videoUpstreamMiddleware());
+    server.middlewares.use(frameFromVideoMiddleware());
+    server.middlewares.use(authSmsUpstreamMiddleware());
     server.middlewares.use(authCheckUpstreamMiddleware());
     server.middlewares.use(send);
   };

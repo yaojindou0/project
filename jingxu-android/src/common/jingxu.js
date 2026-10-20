@@ -1,5 +1,16 @@
 /** 镜叙安卓端与网页版共用的数据模型、提示词与本地存储。生成请求打到本机/局域网的 aisource 服务。 */
 
+import {
+  dehydrateCharacters,
+  dehydrateProjectMedia,
+  hydrateCharacters,
+  hydrateProjectMedia,
+  isEphemeralMediaUrl,
+  isMediaRef,
+  isPortableMediaUrl as isPortableMediaUrlIdb,
+  toPersistentMediaUrl as toPersistentMediaUrlIdb,
+} from "./media-db.js";
+
 export const STYLE_PRESETS = [
   {
     id: "guoman",
@@ -45,6 +56,8 @@ export const DEFAULT_SETTINGS = {
 const SETTINGS_KEY = "jingxu-settings";
 const PROJECTS_KEY = "jingxu-projects";
 const ACTIVE_KEY = "jingxu-active-project";
+/** 跨项目角色库：导入/修改角色后写入，新建项目可恢复 */
+const CHARACTER_LIBRARY_KEY = "jingxu-character-library";
 
 export const LINE_KINDS = [
   { id: "dialogue", label: "对白" },
@@ -326,11 +339,53 @@ export function loadProjects() {
   return Array.isArray(list) ? list : [];
 }
 
+/** 同步写入（仅元数据兜底）；完整媒体请用 saveProjectAsync */
 export function saveProject(project) {
   const list = loadProjects().filter((p) => p.id !== project.id);
   list.unshift({ ...project, updatedAt: new Date().toISOString() });
-  writeJson(PROJECTS_KEY, list);
-  writeJson(ACTIVE_KEY, project.id);
+  try {
+    writeJson(PROJECTS_KEY, list);
+    writeJson(ACTIVE_KEY, project.id);
+  } catch (e) {
+    throw new Error(
+      e?.message ||
+        "本地存储失败（可能因图片过大）。请稍后重试，系统会把大图写入缓存。",
+    );
+  }
+}
+
+/** 项目媒体脱水后写入 storage，并同步角色库缓存 */
+export async function saveProjectAsync(project) {
+  const dehydrated = await dehydrateProjectMedia({
+    ...project,
+    updatedAt: new Date().toISOString(),
+  });
+  saveProject(dehydrated);
+  await saveCharacterLibrary(dehydrated.characters || []);
+  return dehydrated;
+}
+
+export async function loadActiveProjectAsync() {
+  const raw = loadActiveProject();
+  if (!raw) return null;
+  return hydrateProjectMedia(raw);
+}
+
+export async function saveCharacterLibrary(characters) {
+  const list = await dehydrateCharacters(characters || []);
+  writeJson(CHARACTER_LIBRARY_KEY, {
+    updatedAt: new Date().toISOString(),
+    characters: list,
+  });
+  return list;
+}
+
+export async function loadCharacterLibrary() {
+  const pack = readJson(CHARACTER_LIBRARY_KEY, null);
+  if (!pack || !Array.isArray(pack.characters) || !pack.characters.length) {
+    return [];
+  }
+  return hydrateCharacters(pack.characters);
 }
 
 export function deleteProject(id) {
@@ -497,6 +552,45 @@ export function persistAccountConversationId(settings, conversationId, accountId
   };
 }
 
+/**
+ * 解析「当前账号 + 本项目」专用对话窗。
+ * 不回落账号全局 conversationId，避免跨项目串窗。
+ */
+export function resolveProjectConversationId(project, settings, accountId) {
+  if (!project) return "";
+  const targetId =
+    String(accountId || "").trim() ||
+    resolveActiveAccountId(settings) ||
+    String(settings?.activeAccountId || "").trim();
+  if (!targetId) return "";
+  const map = project.videoConversationsByAccount || {};
+  const mapped = map[targetId];
+  if (isRealConversationId(mapped)) return String(mapped).trim();
+  // 旧单值：仅 map 为空时认领给当前账号，避免换号串窗
+  if (
+    Object.keys(map).length === 0 &&
+    isRealConversationId(project.videoConversationId)
+  ) {
+    return String(project.videoConversationId).trim();
+  }
+  return "";
+}
+
+/** 写入项目「账号→对话」映射，并镜像旧字段 videoConversationId */
+export function withProjectConversationId(project, conversationId, accountId) {
+  const id = String(conversationId || "").trim();
+  const accId = String(accountId || "").trim();
+  if (!project || !isRealConversationId(id) || !accId) return project;
+  return {
+    ...project,
+    videoConversationId: id,
+    videoConversationsByAccount: {
+      ...(project.videoConversationsByAccount || {}),
+      [accId]: id,
+    },
+  };
+}
+
 export function formatAccountLabel(account) {
   if (!account) return "未选账号";
   const plat =
@@ -642,18 +736,53 @@ export function matchShotCharacters(shot, characters) {
   return [...hit.values()].slice(0, 4);
 }
 
+/** 与 PC shot-script.ts flattenDialogue 一致 */
 export function flattenDialogue(lines) {
-  return (lines || [])
+  if (!lines?.length) return "";
+  return lines
     .filter((l) => l.text?.trim())
     .map((l) => {
-      if (l.kind === "aside") return `旁白：${l.text.trim()}`;
-      if (l.kind === "inner") return `${l.speaker || "角色"}内心：${l.text.trim()}`;
-      if (l.kind === "monologue") return `${l.speaker || "角色"}独白：${l.text.trim()}`;
-      return `${l.speaker || "角色"}：${l.text.trim()}`;
+      if (l.kind === "aside") return `【旁白】${l.text.trim()}`;
+      if (l.kind === "inner") {
+        return l.speaker
+          ? `${l.speaker}（内心）${l.text.trim()}`
+          : `【内心】${l.text.trim()}`;
+      }
+      if (l.kind === "monologue") {
+        return l.speaker
+          ? `${l.speaker}（独白）${l.text.trim()}`
+          : `【独白】${l.text.trim()}`;
+      }
+      return l.speaker ? `${l.speaker}：${l.text.trim()}` : l.text.trim();
     })
-    .join(" ");
+    .join(" / ");
 }
 
+/** 与 PC normalizeLines 一致：空 lines 时用 dialogue 兜底 */
+function normalizeLines(raw, fallbackDialogue) {
+  if (Array.isArray(raw) && raw.length) {
+    return raw.map((item) => {
+      const o = item || {};
+      const kindRaw = String(o.kind || o.type || "dialogue").toLowerCase();
+      let kind = "dialogue";
+      if (/独白|monologue/.test(kindRaw)) kind = "monologue";
+      else if (/旁白|aside|narrat/.test(kindRaw)) kind = "aside";
+      else if (/内心|inner|thought/.test(kindRaw)) kind = "inner";
+      return {
+        id: o.id || uid("line"),
+        kind,
+        speaker: o.speaker || "",
+        text: (o.text || o.content || "").trim(),
+      };
+    });
+  }
+  if (fallbackDialogue?.trim()) {
+    return [{ id: uid("line"), kind: "dialogue", speaker: "", text: fallbackDialogue.trim() }];
+  }
+  return [];
+}
+
+/** 与 PC shot-script.ts composeVideoPrompt 一致 */
 export function composeVideoPrompt(shot, stylePreset, aspectRatio) {
   const parts = [];
   if (aspectRatio?.trim()) parts.push(`画幅：${aspectRatio.trim()}`);
@@ -666,7 +795,7 @@ export function composeVideoPrompt(shot, stylePreset, aspectRatio) {
       .join("；");
     if (intros) parts.push(`人物介绍：${intros}`);
   }
-  const lines = shot.lines?.length ? shot.lines : [];
+  const lines = shot.lines?.length ? shot.lines : normalizeLines(undefined, shot.dialogue);
   if (lines.length) {
     const speech = lines
       .filter((l) => l.text?.trim())
@@ -680,7 +809,11 @@ export function composeVideoPrompt(shot, stylePreset, aspectRatio) {
     if (speech) parts.push(`对白节奏：${speech}`);
   }
   if (shot.storyboardPrompt?.trim()) parts.push(shot.storyboardPrompt.trim());
-  else parts.push([shot.scene, shot.camera, flattenDialogue(lines) || shot.dialogue].filter(Boolean).join("。"));
+  else {
+    parts.push(
+      [shot.scene, shot.camera, flattenDialogue(lines)].filter(Boolean).join("。"),
+    );
+  }
   return ensureRenderStyle(parts.join("\n"), stylePreset);
 }
 
@@ -849,6 +982,192 @@ export const ACCESS_PACK_KIND = "jingxu-access";
 export const ACCESS_PACK_VERSION = 1;
 export const CHARACTER_PACK_KIND = "jingxu-characters";
 export const CHARACTER_PACK_VERSION = 1;
+export const PROJECT_PACK_KIND = "jingxu-project";
+export const PROJECT_PACK_VERSION = 1;
+/** 当前缓存默认绑定的项目名 */
+export const DEFAULT_PROJECT_TITLE = "仙帝重生";
+
+/** 新建空项目（标题默认「仙帝重生」） */
+export function createEmptyProject(opts = {}) {
+  const now = new Date().toISOString();
+  return {
+    id: uid("proj"),
+    title: String(opts.title || DEFAULT_PROJECT_TITLE).trim() || DEFAULT_PROJECT_TITLE,
+    premise: String(opts.premise || "").trim(),
+    style: String(opts.style || "").trim(),
+    aspectRatio: opts.aspectRatio || "9:16",
+    durationPerShot: clampShotDuration(opts.durationPerShot, 15),
+    characters: Array.isArray(opts.characters) ? opts.characters : [],
+    shots: Array.isArray(opts.shots) ? opts.shots : [],
+    studioMode: opts.studioMode === "board" ? "board" : "raw",
+    studioCaches: opts.studioCaches || undefined,
+    coverUrl: opts.coverUrl || undefined,
+    videoConversationId: opts.videoConversationId || undefined,
+    videoConversationsByAccount: opts.videoConversationsByAccount || undefined,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * 把当前本机缓存绑定到名为「仙帝重生」的项目：
+ * - 已有活动项目且标题为空/未命名 → 改名为仙帝重生
+ * - 无项目 → 用角色库建仙帝重生并设为活动
+ * - 有项目无活动 → 优先选仙帝重生，否则第一个
+ */
+export async function ensureDefaultProjectBound(title = DEFAULT_PROJECT_TITLE) {
+  const want = String(title || DEFAULT_PROJECT_TITLE).trim() || DEFAULT_PROJECT_TITLE;
+  let list = loadProjects();
+  let active = loadActiveProject();
+
+  if (active) {
+    const t = String(active.title || "").trim();
+    if (!t || t === "未命名漫剧") {
+      active = { ...active, title: want, updatedAt: new Date().toISOString() };
+      await saveProjectAsync(active);
+      return hydrateProjectMedia(active);
+    }
+    return hydrateProjectMedia(active);
+  }
+
+  if (list.length) {
+    const hit =
+      list.find((p) => String(p.title || "").trim() === want) || list[0];
+    setActiveProjectId(hit.id);
+    return hydrateProjectMedia(hit);
+  }
+
+  const lib = await loadCharacterLibrary();
+  const project = createEmptyProject({
+    title: want,
+    characters: lib,
+  });
+  await saveProjectAsync(project);
+  setActiveProjectId(project.id);
+  return hydrateProjectMedia(project);
+}
+
+/** 导出完整项目包（故事/角色/分镜/媒体全部落实为可携带 URL） */
+export async function buildProjectExportPack(project) {
+  const hydrated = await hydrateProjectMedia(project);
+  const characters = [];
+  for (const c of hydrated.characters || []) {
+    characters.push(await materializeCharacterImages(c));
+  }
+  const persistShotUrl = async (u) => {
+    if (!u) return undefined;
+    const got = await toPersistentMediaUrl(u);
+    return got || undefined;
+  };
+  const shots = [];
+  for (const s of hydrated.shots || []) {
+    shots.push({
+      ...s,
+      index: typeof s.index === "number" ? s.index : shots.length,
+      sceneImageUrl: await persistShotUrl(s.sceneImageUrl),
+      imageUrl: await persistShotUrl(s.imageUrl),
+      lastFrameUrl: await persistShotUrl(s.lastFrameUrl),
+      videoUrl: await persistShotUrl(s.videoUrl),
+    });
+  }
+  const coverUrl = await persistShotUrl(hydrated.coverUrl);
+  return {
+    kind: PROJECT_PACK_KIND,
+    version: PROJECT_PACK_VERSION,
+    exportedAt: new Date().toISOString(),
+    project: {
+      ...hydrated,
+      characters,
+      shots,
+      coverUrl,
+    },
+  };
+}
+
+export function downloadProjectPack(filename, pack) {
+  return exportJsonFile(filename, pack, { pretty: false });
+}
+
+/** 解析导入的项目包（兼容裸 DramaProject / 角色包误选） */
+export async function parseProjectImportPack(json) {
+  if (!json || typeof json !== "object") {
+    throw new Error("无效的项目文件");
+  }
+  let raw = json;
+  if (json.kind === PROJECT_PACK_KIND && json.project) {
+    raw = json.project;
+  } else if (json.kind === CHARACTER_PACK_KIND) {
+    throw new Error("这是角色包，请用「导入角色」；完整项目请导出「项目包」");
+  } else if (!json.title && !json.premise && !Array.isArray(json.shots)) {
+    throw new Error("不是镜叙项目文件（需含 title / shots）");
+  }
+
+  const now = new Date().toISOString();
+  const characters = [];
+  for (const c of raw.characters || []) {
+    characters.push(await materializeCharacterImages({
+      ...c,
+      id: c.id || uid("char"),
+      locked: c.locked ?? true,
+    }));
+  }
+  const shots = (raw.shots || []).map((s, i) => ({
+    ...s,
+    id: s.id || uid("shot"),
+    index: i,
+    status: s.status || (s.videoUrl ? "ready" : "pending"),
+  }));
+  const project = {
+    id: uid("proj"),
+    title:
+      String(raw.title || "").trim() ||
+      DEFAULT_PROJECT_TITLE,
+    premise: String(raw.premise || "").trim(),
+    style: String(raw.style || "").trim(),
+    aspectRatio: raw.aspectRatio || "9:16",
+    durationPerShot: clampShotDuration(raw.durationPerShot, 15),
+    characters,
+    shots,
+    coverUrl: raw.coverUrl || undefined,
+    studioMode: raw.studioMode === "board" ? "board" : "raw",
+    studioCaches:
+      raw.studioCaches && typeof raw.studioCaches === "object"
+        ? raw.studioCaches
+        : undefined,
+    videoConversationId: raw.videoConversationId || undefined,
+    videoConversationsByAccount:
+      raw.videoConversationsByAccount &&
+      typeof raw.videoConversationsByAccount === "object"
+        ? raw.videoConversationsByAccount
+        : undefined,
+    createdAt: raw.createdAt || now,
+    updatedAt: now,
+  };
+  return hydrateProjectMedia(project);
+}
+
+export async function readProjectPackFile() {
+  const json = await importJsonFile();
+  return parseProjectImportPack(json);
+}
+
+export async function importProjectFromFile() {
+  const project = await readProjectPackFile();
+  await saveProjectAsync(project);
+  setActiveProjectId(project.id);
+  return project;
+}
+
+export async function exportProjectById(id) {
+  const list = loadProjects();
+  const found = list.find((p) => p.id === id);
+  if (!found) throw new Error("项目不存在");
+  const hydrated = await hydrateProjectMedia(found);
+  const pack = await buildProjectExportPack(hydrated);
+  const name = `${hydrated.title || DEFAULT_PROJECT_TITLE}-项目包.json`;
+  await downloadProjectPack(name, pack);
+  return pack;
+}
 
 const ACCESS_SETTING_KEYS = [
   "useMock",
@@ -1034,14 +1353,7 @@ export function mergeAccessPack(current, pack, mode = "merge") {
 }
 
 export function isPortableMediaUrl(url) {
-  if (!url) return false;
-  if (String(url).startsWith("jingxu-media:")) return false;
-  if (String(url).startsWith("blob:")) return false;
-  if (/\/(?:api\/)?tmp-media\//i.test(url)) return false;
-  if (String(url).startsWith("data:")) {
-    return url.length > 64 && /;base64,/i.test(url);
-  }
-  return /^https?:\/\//i.test(url);
+  return isPortableMediaUrlIdb(url);
 }
 
 function arrayBufferToBase64(buffer) {
@@ -1098,8 +1410,16 @@ async function fetchAsDataUrl(url) {
 function absolutizeMaybe(url) {
   if (!url) return url;
   if (/^(https?:|data:|blob:|file:|jingxu-media:)/i.test(url)) return url;
+  // 本机临时媒体必须走当前页同源，不能拼到豆包 mediaBase
+  if (/\/(?:api\/)?tmp-media\//i.test(url) || url.startsWith("/")) {
+    // #ifdef H5
+    if (typeof location !== "undefined" && location.origin) {
+      return `${location.origin}${url.startsWith("/") ? url : `/${url}`}`;
+    }
+    // #endif
+  }
   const ep = resolveEndpoints();
-  const base = String(ep.mediaBase || resolveApiBase() || "").replace(/\/+$/, "");
+  const base = String(resolveApiBase() || ep.mediaBase || "").replace(/\/+$/, "");
   if (!base) return url;
   if (url.startsWith("/api/tmp-media/")) return `${base}${url.replace(/^\/api/, "")}`;
   if (url.startsWith(UPSTREAM_PATHS.tmpMediaPrefix)) return `${base}${url}`;
@@ -1107,14 +1427,13 @@ function absolutizeMaybe(url) {
   return url;
 }
 
-/** 导出前把角色图落实为可携带的 data/http URL（对齐网页 toPersistentMediaUrl） */
+/** 导出/落库前把角色图落实为可携带的 data/http URL（对齐网页 toPersistentMediaUrl） */
 export async function toPersistentMediaUrl(url) {
+  if (isMediaRef(url) || isEphemeralMediaUrl(url) || isPortableMediaUrlIdb(url) || (url && url.startsWith("/"))) {
+    return toPersistentMediaUrlIdb(url);
+  }
   if (!url) return undefined;
   if (String(url).startsWith("data:")) return isPortableMediaUrl(url) ? url : undefined;
-  if (String(url).startsWith("jingxu-media:")) return undefined;
-  if (/\/(?:api\/)?tmp-media\//i.test(url) || url.startsWith("/")) {
-    return (await fetchAsDataUrl(url)) || undefined;
-  }
   if (/^https?:\/\//i.test(url)) {
     const embedded = await fetchAsDataUrl(url);
     return embedded || url;
@@ -1556,11 +1875,28 @@ export function extractSessionId(raw) {
 
 export function extractCookieHeader(raw, sessionId) {
   const t = (raw || "").trim();
-  if (!t.includes("=") || !/;/.test(t) || !/sessionid/i.test(t)) return "";
-  if (!/(?:^|[;\s])sessionid=/i.test(t)) {
-    return `sessionid=${sessionId}; sessionid_ss=${sessionId}; ${t}`;
+  if (!t.includes("=")) return "";
+  // 整段 Cookie（含分号）优先
+  if (/;/.test(t) && /sessionid/i.test(t)) {
+    if (!/(?:^|[;\s])sessionid=/i.test(t) && sessionId) {
+      return `sessionid=${sessionId}; sessionid_ss=${sessionId}; ${t}`;
+    }
+    return t;
   }
-  return t;
+  // 仅 sessionid=xxx：也写入 cookieHeader，便于下游统一取 Cookie 字段
+  if (/^sessionid(?:_ss)?=/i.test(t) && sessionId) {
+    return `sessionid=${sessionId}; sessionid_ss=${sessionId}`;
+  }
+  return "";
+}
+
+/** 是否具备出片更稳的整段 Cookie（ttwid / msToken 等），而非仅 sessionid */
+export function accountHasFullCookie(account) {
+  const c = String(account?.cookieHeader || "").trim();
+  if (!c || !c.includes(";")) return false;
+  if (/ttwid|msToken|passport_csrf|sid_tt|odin_tt|sid_guard/i.test(c)) return true;
+  const parts = c.split(";").map((s) => s.trim()).filter(Boolean);
+  return parts.length >= 3;
 }
 
 export function downloadShotVideo(shot) {

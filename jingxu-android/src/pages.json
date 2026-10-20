@@ -1,6 +1,14 @@
 {
   "pages": [
     {
+      "path": "pages/projects/index",
+      "style": {
+        "navigationBarTitleText": "项目",
+        "navigationBarBackgroundColor": "#eef4f5",
+        "navigationBarTextStyle": "black"
+      }
+    },
+    {
       "path": "pages/studio/index",
       "style": {
         "navigationBarTitleText": "创作台",

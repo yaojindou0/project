@@ -4,7 +4,12 @@
 
 import https from "node:https";
 import http from "node:http";
-import { digits, pickDoubaoAccount, uuid } from "./doubao-chat.mjs";
+import {
+  digits,
+  pickDoubaoAccount,
+  resolveDoubaoCookie,
+  uuid,
+} from "./doubao-chat.mjs";
 import { putTmpMedia } from "./tmp-media.mjs";
 
 const SKILL_AID = "582478";
@@ -487,8 +492,6 @@ export function resolveImageAuth(settings) {
   const sessionId = String(
     account?.sessionId || settings?.doubaoSessionId || "",
   ).trim();
-  const cookieHeader = String(
-    account?.cookie || settings?.doubaoCookie || "",
-  ).trim();
+  const cookieHeader = resolveDoubaoCookie(account, settings);
   return { arkKey, sessionId, cookieHeader };
 }

@@ -6,7 +6,7 @@
 import {
   doubaoWebChatText,
   firstJsonObject,
-  pickDoubaoAccount,
+  resolveDoubaoAuth,
   uid,
 } from "./doubao-chat.mjs";
 
@@ -42,10 +42,11 @@ function normalize(parsed, body) {
           locked: true,
         }))
     : [];
+  // 与 PC normalizeShot 一致：index 从 0 起，UI 再显示「镜{{index+1}}」
   const shots = Array.isArray(parsed.shots)
     ? parsed.shots.slice(0, shotCount).map((s, i) => ({
         id: uid("shot"),
-        index: i + 1,
+        index: i,
         scene: String(s.scene || "").trim() || `镜头${i + 1}`,
         locationName: String(s.locationName || "").trim(),
         placeIntro: String(s.placeIntro || "").trim(),
@@ -73,11 +74,11 @@ function normalize(parsed, body) {
       }))
     : [];
   while (shots.length < shotCount) {
-    const i = shots.length + 1;
+    const i = shots.length;
     shots.push({
       id: uid("shot"),
       index: i,
-      scene: `镜头${i}`,
+      scene: `镜头${i + 1}`,
       locationName: "",
       placeIntro: "",
       characterIntros: [],
@@ -102,13 +103,7 @@ export async function runScriptUpstream(body, scriptUrl) {
     err.status = 400;
     throw err;
   }
-  const account = pickDoubaoAccount(body.settings);
-  const sessionId = String(
-    account?.sessionId || body.settings?.doubaoSessionId || "",
-  ).trim();
-  const cookieHeader = String(
-    account?.cookie || body.settings?.doubaoCookie || "",
-  ).trim();
+  const { sessionId, cookieHeader } = resolveDoubaoAuth(body.settings);
   if (!sessionId) {
     const err = new Error("请先在设置里登录豆包，或粘贴网页 session");
     err.status = 400;

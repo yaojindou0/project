@@ -1,5 +1,5 @@
 /**
- * 生图结果落盘，返回同源 /tmp-media/:id，避免 data URL 撑爆 JSON、远程链防盗链空白。
+ * 生图/视频结果落盘，返回同源 /tmp-media/:id。
  */
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, readFile, readdir } from "node:fs/promises";
@@ -15,6 +15,8 @@ function extFromMime(mime) {
   if (m.includes("webp")) return "webp";
   if (m.includes("gif")) return "gif";
   if (m.includes("avif")) return "avif";
+  if (m.includes("webm")) return "webm";
+  if (m.includes("mp4") || m.includes("video")) return "mp4";
   return "bin";
 }
 
@@ -24,6 +26,8 @@ function mimeFromExt(ext) {
   if (ext === "webp") return "image/webp";
   if (ext === "gif") return "image/gif";
   if (ext === "avif") return "image/avif";
+  if (ext === "webm") return "video/webm";
+  if (ext === "mp4") return "video/mp4";
   return "application/octet-stream";
 }
 

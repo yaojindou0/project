@@ -83,6 +83,31 @@ export function pickDoubaoAccount(settings) {
   return accounts.find((a) => a.enabled && a.platform === "doubao" && a.sessionId?.trim()) || null;
 }
 
+/** 账号字段是 cookieHeader（设置页粘贴），兼容旧 cookie */
+export function resolveDoubaoCookie(account, settings) {
+  return String(
+    account?.cookieHeader ||
+      account?.cookie ||
+      settings?.doubaoCookie ||
+      "",
+  ).trim();
+}
+
+/** 设置里账号字段是 cookieHeader（不是 cookie） */
+export function resolveDoubaoAuth(settings) {
+  const account = pickDoubaoAccount(settings);
+  const sessionId = String(
+    account?.sessionId || settings?.doubaoSessionId || "",
+  ).trim();
+  const cookieHeader = String(
+    account?.cookieHeader ||
+      account?.cookie ||
+      settings?.doubaoCookie ||
+      "",
+  ).trim();
+  return { account, sessionId, cookieHeader };
+}
+
 function absorb(state, chunk) {
   if (!chunk) return;
   if (!state.content || (chunk.length >= state.content.length && chunk.startsWith(state.content))) {

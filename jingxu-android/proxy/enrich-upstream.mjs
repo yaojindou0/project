@@ -6,7 +6,7 @@
 import {
   doubaoWebChatText,
   firstJsonObject,
-  pickDoubaoAccount,
+  resolveDoubaoAuth,
   uid,
 } from "./doubao-chat.mjs";
 
@@ -57,13 +57,7 @@ export async function runEnrichUpstream(body, enrichUrl) {
     err.status = 400;
     throw err;
   }
-  const account = pickDoubaoAccount(body.settings);
-  const sessionId = String(
-    account?.sessionId || body.settings?.doubaoSessionId || "",
-  ).trim();
-  const cookieHeader = String(
-    account?.cookie || body.settings?.doubaoCookie || "",
-  ).trim();
+  const { sessionId, cookieHeader } = resolveDoubaoAuth(body.settings);
   if (!sessionId) {
     const err = new Error("请先在设置里登录豆包，或粘贴网页 session");
     err.status = 400;

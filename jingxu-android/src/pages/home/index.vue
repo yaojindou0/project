@@ -55,7 +55,7 @@ export default {
   },
   methods: {
     goStudio() {
-      uni.reLaunch({ url: "/pages/studio/index" });
+      uni.reLaunch({ url: "/pages/projects/index" });
     },
   },
 };

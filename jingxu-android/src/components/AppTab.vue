@@ -18,6 +18,7 @@ export default {
   data() {
     return {
       items: [
+        { path: "/pages/projects/index", label: "项目" },
         { path: "/pages/studio/index", label: "创作" },
         { path: "/pages/settings/index", label: "设置" },
       ],
