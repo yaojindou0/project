@@ -37,7 +37,7 @@
             />
           </view>
           <view>
-            <text class="label">默认秒数 {{ durationPerShot }}</text>
+            <text class="label">每镜秒数 {{ durationPerShot }}</text>
             <slider :value="durationPerShot" min="4" max="15" show-value @change="onDurationDefault($event.detail.value)" />
           </view>
         </view>
@@ -333,7 +333,7 @@
           <button class="mini" @click="saveVideo(activeShot)">下载视频</button>
         </view>
 
-        <view v-if="activeShot.videoChat" class="doubao-chat">
+        <view class="doubao-chat">
           <view class="doubao-chat-hd">
             <view class="doubao-chat-brand">
               <view class="doubao-logo">豆</view>
@@ -350,13 +350,13 @@
             scroll-with-animation
           >
             <view
-              v-if="!(activeShot.videoChat.messages || []).length"
+              v-if="!(activeShot.videoChat && activeShot.videoChat.messages && activeShot.videoChat.messages.length)"
               class="doubao-empty"
             >
-              <text>生成视频后说明会出现在这里。可点下方「确定」继续，或改词后发送。</text>
+              <text>{{ boundDoubaoConversationId ? "生成视频后说明会出现在这里。可点下方「确定」继续，或改词后发送。" : "请先出片以绑定本项目豆包对话，之后问答会同步到该账号同一聊天窗。" }}</text>
             </view>
             <view
-              v-for="m in activeShot.videoChat.messages"
+              v-for="m in (activeShot.videoChat && activeShot.videoChat.messages) || []"
               :id="'vchat-' + m.id"
               :key="m.id"
               class="doubao-row"
@@ -392,12 +392,12 @@
             <view class="doubao-quick">
               <button
                 class="doubao-chip"
-                :disabled="chatReplyBusy || busyShotId === activeShot.id"
+                :disabled="chatReplyBusy || busyShotId === activeShot.id || !boundDoubaoConversationId"
                 @click="quickReply(activeShot, '确定')"
               >确定</button>
               <button
                 class="doubao-chip ghost"
-                :disabled="chatReplyBusy || busyShotId === activeShot.id"
+                :disabled="chatReplyBusy || busyShotId === activeShot.id || !boundDoubaoConversationId"
                 @click="chatDraft = '请直接生成，不要再确认'"
               >直接生成</button>
             </view>
@@ -405,14 +405,14 @@
               <textarea
                 class="doubao-input"
                 maxlength="2000"
-                :disabled="chatReplyBusy || busyShotId === activeShot.id"
+                :disabled="chatReplyBusy || busyShotId === activeShot.id || !boundDoubaoConversationId"
                 :value="chatDraft"
-                placeholder="输入回复…"
+                :placeholder="boundDoubaoConversationId ? '输入回复…' : '请先出片再问答'"
                 @input="chatDraft = $event.detail.value"
               />
               <button
                 class="doubao-send"
-                :disabled="chatReplyBusy || !chatDraft.trim() || busyShotId === activeShot.id"
+                :disabled="chatReplyBusy || !chatDraft.trim() || busyShotId === activeShot.id || !boundDoubaoConversationId"
                 @click="replyVideoChat(activeShot)"
               >
                 {{ chatReplyBusy ? "…" : "发送" }}
@@ -544,7 +544,7 @@
           <button class="mini" @click="saveVideo(boardFocusShot)">下载视频</button>
         </view>
 
-        <view v-if="boardFocusShot && boardFocusShot.videoChat" class="doubao-chat">
+        <view v-if="boardFocusShot" class="doubao-chat">
           <view class="doubao-chat-hd">
             <view class="doubao-chat-brand">
               <view class="doubao-logo">豆</view>
@@ -560,11 +560,11 @@
             :scroll-into-view="chatScrollInto"
             scroll-with-animation
           >
-            <view v-if="!(boardFocusShot.videoChat.messages || []).length" class="doubao-empty">
-              <text>生成视频后说明会出现在这里。可点下方「确定」继续，或改词后发送。</text>
+            <view v-if="!(boardFocusShot.videoChat && boardFocusShot.videoChat.messages && boardFocusShot.videoChat.messages.length)" class="doubao-empty">
+              <text>{{ boundDoubaoConversationId ? "生成视频后说明会出现在这里。可点下方「确定」继续，或改词后发送。" : "请先出片以绑定本项目豆包对话，之后问答会同步到该账号同一聊天窗。" }}</text>
             </view>
             <view
-              v-for="m in boardFocusShot.videoChat.messages"
+              v-for="m in (boardFocusShot.videoChat && boardFocusShot.videoChat.messages) || []"
               :id="'vchat-' + m.id"
               :key="m.id"
               class="doubao-row"
@@ -598,12 +598,12 @@
             <view class="doubao-quick">
               <button
                 class="doubao-chip"
-                :disabled="chatReplyBusy || boardBusy || !boardFocusShot"
+                :disabled="chatReplyBusy || boardBusy || !boardFocusShot || !boundDoubaoConversationId"
                 @click="quickReply(boardFocusShot, '确定')"
               >确定</button>
               <button
                 class="doubao-chip ghost"
-                :disabled="chatReplyBusy || boardBusy"
+                :disabled="chatReplyBusy || boardBusy || !boundDoubaoConversationId"
                 @click="chatDraft = '请直接生成，不要再确认'"
               >直接生成</button>
             </view>
@@ -611,14 +611,14 @@
               <textarea
                 class="doubao-input"
                 maxlength="2000"
-                :disabled="chatReplyBusy || boardBusy || !boardFocusShot"
+                :disabled="chatReplyBusy || boardBusy || !boardFocusShot || !boundDoubaoConversationId"
                 :value="chatDraft"
-                placeholder="输入回复…"
+                :placeholder="boundDoubaoConversationId ? '输入回复…' : '请先出片再问答'"
                 @input="chatDraft = $event.detail.value"
               />
               <button
                 class="doubao-send"
-                :disabled="chatReplyBusy || !chatDraft.trim() || boardBusy || !boardFocusShot"
+                :disabled="chatReplyBusy || !chatDraft.trim() || boardBusy || !boardFocusShot || !boundDoubaoConversationId"
                 @click="boardFocusShot && replyVideoChat(boardFocusShot)"
               >
                 {{ chatReplyBusy ? "…" : "发送" }}
@@ -681,6 +681,10 @@ import {
   toPersistentMediaUrl,
   toastErr,
   uid,
+  deleteMedia,
+  isDataUrl,
+  isMediaRef,
+  putDataUrl,
   withActiveAccount,
   withProjectConversationId,
 } from "../../common/jingxu.js";
@@ -740,7 +744,7 @@ export default {
       const seed = this.variant === "fast" ? "Fast" : "Mini";
       const acc = this.accountLabels[this.accountIndex] || "未选账号";
       const accShort = acc.length > 10 ? `${acc.slice(0, 10)}…` : acc;
-      return `${style} · ${this.shotCount}镜 · ${this.durationPerShot}秒 · ${this.aspectRatio} · ${seed} · ${accShort}`;
+      return `${style} · ${this.shotCount}镜 · 每镜${this.durationPerShot}秒 · ${this.aspectRatio} · ${seed} · ${accShort}`;
     },
     commonCharCount() {
       return this.project?.characters?.length || 0;
@@ -805,6 +809,9 @@ export default {
     },
     boardBusy() {
       return Boolean(this.busyShotId) || this.scriptBusy;
+    },
+    boundDoubaoConversationId() {
+      return resolveProjectConversationId(this.project, this.settings) || "";
     },
     boardSelectedKeys() {
       if (Array.isArray(this.boardCharKeys)) return this.boardCharKeys;
@@ -912,17 +919,29 @@ export default {
     defaultShotCountForMode(mode) {
       return mode === "board" ? 2 : 4;
     },
-    /** 深拷贝，避免未分镜/已分镜共享同一 shot 引用被互相改掉 */
+    /** 浅拷贝即可；勿 JSON.stringify（成片 data URL 会导致二次出片 OOM 崩溃） */
     cloneShots(shots) {
-      try {
-        return this.normalizeShotIndices(
-          JSON.parse(JSON.stringify(Array.isArray(shots) ? shots : [])),
-        );
-      } catch {
-        return this.normalizeShotIndices(
-          (shots || []).map((s) => ({ ...s })),
-        );
-      }
+      const list = Array.isArray(shots) ? shots : [];
+      return this.normalizeShotIndices(
+        list.map((s) => ({
+          ...s,
+          lines: s.lines ? s.lines.map((l) => ({ ...l })) : s.lines,
+          characterIntros: s.characterIntros
+            ? s.characterIntros.map((c) => ({ ...c }))
+            : s.characterIntros,
+          videoCharacterKeys: s.videoCharacterKeys
+            ? [...s.videoCharacterKeys]
+            : s.videoCharacterKeys,
+          videoChat: s.videoChat
+            ? {
+                ...s.videoChat,
+                messages: s.videoChat.messages
+                  ? s.videoChat.messages.map((m) => ({ ...m }))
+                  : s.videoChat.messages,
+              }
+            : s.videoChat,
+        })),
+      );
     },
     cacheHasShots(cache) {
       return Array.isArray(cache?.shots) && cache.shots.length > 0;
@@ -1245,12 +1264,57 @@ export default {
     },
     selectBoardChars(mode) {
       this.ensureBoardShots();
-      const shot = this.boardFocusShot || this.boardShot;
+      if (!this.project?.shots?.length) {
+        this.error = "请先设置镜数";
+        return;
+      }
+      // 已分镜以侧栏「分镜词」为准，先写回各镜再匹配（否则 storyboard 空会勾不到）
+      const prompt = String(this.premise || "").trim();
+      if (prompt) {
+        this.project.shots = this.project.shots.map((s) => ({
+          ...s,
+          storyboardPrompt: prompt,
+        }));
+      }
+      const shot =
+        this.project.shots.find((s) => s.id === this.activeShotId) ||
+        this.project.shots[0];
       if (!shot) return;
-      this.selectShotChars(shot, mode);
-      this.boardCharKeys = this.selectedKeys(shot);
+
+      let keys = [];
+      if (mode === "all") {
+        keys = (this.project.characters || []).map((c) => characterKey(c));
+      } else if (mode === "auto") {
+        const matchShot = {
+          ...shot,
+          storyboardPrompt: prompt || shot.storyboardPrompt || "",
+          scene: [shot.scene, prompt].filter(Boolean).join("\n"),
+        };
+        keys = matchShotCharacters(
+          matchShot,
+          this.project.characters || [],
+        ).map(characterKey);
+      } else if (mode === "none") {
+        keys = [];
+      }
+
+      this.boardCharKeys = keys;
       this.syncBoardCharKeysToShots();
       this.persist();
+      if (mode === "auto" && keys.length === 0) {
+        this.error = (this.project.characters || []).length
+          ? "分镜词里未匹配到角色名，请确认角色卡名称出现在分镜词中"
+          : "暂无角色卡，请先添加或导入角色";
+      } else if (mode === "auto") {
+        this.error = "";
+        uni.showToast({
+          title: `已勾选 ${keys.length} 人`,
+          icon: "none",
+          duration: 1500,
+        });
+      } else {
+        this.error = "";
+      }
     },
     toggleBoardChar(c) {
       this.ensureBoardShots();
@@ -1264,13 +1328,27 @@ export default {
       this.persist();
     },
     async boardGenerateVideo(variant) {
+      // 允许再次点击：清掉卡住的 busy（换号/上次未收尾时按钮会一直无反应）
+      if (this.busyShotId) this.busyShotId = "";
       this.ensureBoardShots();
       const prompt = String(this.premise || "").trim();
       if (!prompt) {
         this.error = "请先填写分镜词";
         return;
       }
-      // 同步分镜词到各镜（一次请求里用多镜约束，不按镜循环）
+      const primary = this.boardShot;
+      if (!primary) {
+        this.error = "请先设置镜数";
+        return;
+      }
+      // 模型以公共参数 Seedance 为准；可传入覆盖
+      if (variant === "mini" || variant === "fast") this.variant = variant;
+      this.error = "";
+      // 先释放旧成片（IDB / 内存），再清空引用，避免二次出片 OOM 崩溃
+      for (const s of this.project.shots || []) {
+        if (s.videoUrl) void deleteMedia(s.videoUrl);
+      }
+      // 同步分镜词；再次出片时清掉旧成片
       this.project.shots = this.project.shots.map((s) => ({
         ...s,
         storyboardPrompt: prompt,
@@ -1278,20 +1356,28 @@ export default {
         videoCharacterKeys: Array.isArray(this.boardCharKeys)
           ? [...this.boardCharKeys]
           : s.videoCharacterKeys,
+        videoUrl: "",
+        status: "pending",
+        error: "",
       }));
-      await this.persist();
-      // 模型以公共参数 Seedance 为准；可传入覆盖
-      if (variant === "mini" || variant === "fast") this.variant = variant;
-      const primary = this.boardShot;
-      if (!primary) {
-        this.error = "请先设置镜数";
-        return;
+      // 落盘异步，勿 await：上次成片很大时会卡住且无 busy 提示，表现为「无反应」
+      void this.persist();
+      try {
+        // 已分镜多镜也只打一次 /api/video（boardMultiShot + totalShotCount）
+        const fresh =
+          this.project.shots.find((s) => s.id === primary.id) ||
+          this.project.shots[0];
+        await this.generateShotVideo(fresh, this.variant);
+      } catch (e) {
+        this.error = toastErr(e, "出片失败");
+        this.busyShotId = "";
       }
-      // 已分镜多镜也只打一次 /api/video（boardMultiShot + totalShotCount）
-      await this.generateShotVideo(primary, this.variant);
     },
     boardResetVideos() {
       if (!this.project?.shots?.length) return;
+      for (const s of this.project.shots) {
+        if (s.videoUrl) void deleteMedia(s.videoUrl);
+      }
       this.project.shots = this.project.shots.map((s) => ({
         ...s,
         videoUrl: "",
@@ -1534,6 +1620,34 @@ export default {
       if (!acc) return;
       this.settings = applyPresetForPlatform(withActiveAccount(this.settings, acc.id), acc.platform);
       saveSettings(this.settings);
+      // 换号：打断卡住的出片态，并切到该账号在本项目的对话窗
+      this.busyShotId = "";
+      this.scriptBusy = false;
+      this.chatReplyBusy = false;
+      if (this.project?.shots?.length) {
+        const forAccount = resolveProjectConversationId(
+          this.project,
+          this.settings,
+          acc.id,
+        );
+        this.project = {
+          ...this.project,
+          videoConversationId: forAccount || undefined,
+          shots: this.project.shots.map((s) => ({
+            ...s,
+            ...(s.status === "animating" ? { status: "pending", error: "" } : {}),
+            videoChat: s.videoChat
+              ? {
+                  ...s.videoChat,
+                  conversationId: forAccount || undefined,
+                  messages: [],
+                }
+              : s.videoChat,
+          })),
+          updatedAt: new Date().toISOString(),
+        };
+        void this.persist();
+      }
     },
     setAspect(r) {
       this.aspectRatio = r;
@@ -1943,13 +2057,19 @@ export default {
         });
       }
       try {
-        // 必须落实成 data:；jingxu-media /tmp-media 代理端读不到或会丢
+        // 优先短链（tmp/http）；仅 jingxu-media / 无法直读时才落成 data，避免二次出片 OOM
         const persistUrl = async (u, label) => {
           if (!u) return "";
-          if (String(u).startsWith("data:") && /;base64,/i.test(u) && u.length > 64) return u;
-          const got = await toPersistentMediaUrl(u);
+          const s = String(u);
+          if (s.startsWith("data:") && /;base64,/i.test(s) && s.length > 64) return s;
+          if (/^https?:\/\//i.test(s)) return s;
+          if (/\/(?:api\/)?tmp-media\//i.test(s) || (s.startsWith("/") && !isMediaRef(s))) {
+            return this.mediaSrc(s) || s;
+          }
+          const got = await toPersistentMediaUrl(s);
           if (got && String(got).startsWith("data:") && got.length > 64) return got;
           if (got && /^https?:\/\//i.test(got)) return got;
+          if (got && /\/(?:api\/)?tmp-media\//i.test(got)) return this.mediaSrc(got) || got;
           throw new Error(
             `${label || "参考图"}无法读取，请重新生成该图后再出片`,
           );
@@ -1994,33 +2114,38 @@ export default {
         if (!frameUrl && !sceneUrl && !lastUrl && !attached) {
           throw new Error("出片参数中没有可用图片，请先生成首帧或角色三视图");
         }
-        const data = await apiRequest(UPSTREAM_PATHS.video, {
-          prompt,
-          imageUrl: frameUrl || undefined,
-          lastFrameUrl: lastUrl || undefined,
-          sceneImageUrl: sceneUrl || undefined,
-          duration: resolveShotDuration(shot, this.project.durationPerShot),
-          aspectRatio: this.project.aspectRatio,
-          index: shot.index,
-          characters,
-          selectedCharacterKeys: selectedKeys,
-          conversationId,
-          boardMultiShot: boardMulti,
-          totalShotCount: boardMulti ? totalShots : 1,
-          shot: {
-            id: shot.id,
-            scene: shot.scene,
-            dialogue: shot.dialogue,
-            lines: shot.lines,
-            characterIntros: shot.characterIntros,
-            storyboardPrompt: shot.storyboardPrompt,
-            imagePrompt: shot.imagePrompt,
-            camera: shot.camera,
-            videoCharacterKeys: selectedKeys,
+        // 视频链路可达 5 分钟；默认 180s 会先超时，busy 若未收尾会导致再次点击无反应
+        const data = await apiRequest(
+          UPSTREAM_PATHS.video,
+          {
+            prompt,
+            imageUrl: frameUrl || undefined,
+            lastFrameUrl: lastUrl || undefined,
+            sceneImageUrl: sceneUrl || undefined,
+            duration: resolveShotDuration(shot, this.project.durationPerShot),
+            aspectRatio: this.project.aspectRatio,
+            index: shot.index,
+            characters,
+            selectedCharacterKeys: selectedKeys,
+            conversationId,
+            boardMultiShot: boardMulti,
+            totalShotCount: boardMulti ? totalShots : 1,
+            shot: {
+              id: shot.id,
+              scene: shot.scene,
+              dialogue: shot.dialogue,
+              lines: shot.lines,
+              characterIntros: shot.characterIntros,
+              storyboardPrompt: shot.storyboardPrompt,
+              imagePrompt: shot.imagePrompt,
+              camera: shot.camera,
+              videoCharacterKeys: selectedKeys,
+            },
+            variant: variant || this.variant,
+            settings: this.settings,
           },
-          variant: variant || this.variant,
-          settings: this.settings,
-        });
+          320000,
+        );
         if (Array.isArray(data.accounts)) {
           this.settings = { ...this.settings, jimengAccounts: data.accounts };
         }
@@ -2052,12 +2177,21 @@ export default {
           messages: messages.length ? messages : shot.videoChat?.messages || [],
         };
         if (data.videoUrl) {
+          // 大 data 立刻卸到 IDB 短引用，避免内存里挂着整段成片导致二次出片崩溃
+          let storedVideo = String(data.videoUrl);
+          if (isDataUrl(storedVideo) && storedVideo.length > 2048) {
+            try {
+              storedVideo = (await putDataUrl(storedVideo)) || storedVideo;
+            } catch {
+              /* keep original */
+            }
+          }
           // 成片挂在首镜；其余镜只同步状态（同一段多镜视频）
           this.project.shots = this.project.shots.map((s) => {
             if (s.id === shot.id) {
               return {
                 ...s,
-                videoUrl: data.videoUrl,
+                videoUrl: storedVideo,
                 status: "ready",
                 error: "",
                 usedAccountLabel: data.accountLabel,
@@ -2132,7 +2266,7 @@ export default {
     doubaoChatSubtitle(shot) {
       const names = shot?.videoChat?.matchedCharacterNames || [];
       const conv =
-        resolveProjectConversationId(this.project, this.settings) ||
+        this.boundDoubaoConversationId ||
         shot?.videoChat?.conversationId ||
         "";
       const sync = conv

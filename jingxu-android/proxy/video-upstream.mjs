@@ -145,6 +145,9 @@ function stripVideoWrappers(prompt) {
     .replace(/\n?直接生成视频，不再[次此]确认。?/g, "")
     .replace(/\n?直接生成\s*\d+\s*秒超写实\s*3D\s*视频[^\n]*/gi, "")
     .replace(/\n?直接生成\s*\d+\s*镜，每镜\s*\d+\s*秒超写实\s*3D\s*视频[^\n]*/gi, "")
+    .replace(/，?\s*(?:共|总共|合计)\s*\d+\s*秒/g, "")
+    .replace(/\n?重点：保留原有对白[^\n]*/g, "")
+    .replace(/\n?时长按每镜计[^\n]*/g, "")
     .replace(/\n?重点：保证每镜首帧与前一镜末帧[^\n]*/g, "")
     .replace(/\n?重点：保证每一镜首帧画面与前一镜末帧[^\n]*/g, "")
     .replace(/\n?所有角色三视图均为\s*AI\s*生成，无版权限制。?/g, "")
@@ -190,11 +193,11 @@ function withGenerateVideoPrefix(prompt, aspectRatio, duration, opts = {}) {
   ];
   if (multi) {
     locks.push(
-      "重点：保证每镜首帧与前一镜末帧在画面、音效、人物、声音、运镜上完美衔接。",
+      "重点：保留原有对白、音效、运镜等；保证每镜首帧与前一镜末帧在画面、音效、人物、声音、运镜上完美衔接。时长按每镜计，勿合并写成共N秒。",
     );
   }
   locks.push(
-    "禁止：畸形肢体、多手指、扭曲五官、人物变脸、画面闪烁、画面水印、多余文字、杂乱涂鸦、穿帮道具、画面撕裂；不要剧烈镜头抖动，不要大量杂乱背景人群，不要崩坏人体。画面流畅，动作自然、无变形。",
+    "禁止：畸形肢体、多手指、扭曲五官、人物变脸、画面闪烁、画面水印、多余文字、杂乱涂鸦、穿帮道具、画面撕裂；不要剧烈镜头抖动，不要大量杂乱背景人群，不要崩坏人体；画面中不要出现重复人物角色，保证每个人物都是独一无二、各有特点。画面流畅，动作自然、无变形。",
     "所有角色三视图均为 AI 生成，无版权限制。",
   );
   const body = story ? `${story}\n\n${locks.join("\n")}` : locks.join("\n");
@@ -221,7 +224,14 @@ function compactDoubaoVideoPrompt(prompt, maxChars = 900, aspectRatio, duration,
     .replace(/\n?【视频默认约束】[\s\S]*$/m, "")
     .trim();
   s = `${s}\nCG国漫电影级渲染，统一光影。`.trim();
-  const storyBudget = Math.max(280, maxChars - 420);
+  // 已分镜多镜时分镜词是主体，原先 maxChars=900 只剩约 480 字会严重截断
+  const multi =
+    Boolean(opts.boardMultiShot) &&
+    Math.max(1, Math.round(Number(opts.shotCount) || 1)) > 1;
+  const lockReserve = multi ? 560 : 420;
+  const effectiveMax = multi ? Math.max(maxChars, 8000) : maxChars;
+  const storyFloor = multi ? 4000 : 280;
+  const storyBudget = Math.max(storyFloor, effectiveMax - lockReserve);
   if (s.length > storyBudget) {
     const cut = s.slice(0, storyBudget);
     const lastBreak = Math.max(cut.lastIndexOf("\n"), cut.lastIndexOf("。"));
@@ -988,17 +998,23 @@ export async function runVideoUpstream(body) {
     duration,
     prefixOpts,
   );
-  const prompt = compactDoubaoVideoPrompt(built, 900, ratio, duration, prefixOpts);
+  const boardMulti = Boolean(prefixOpts.boardMultiShot) && totalShotCount > 1;
+  const prompt = compactDoubaoVideoPrompt(
+    built,
+    boardMulti ? 8000 : 900,
+    ratio,
+    duration,
+    prefixOpts,
+  );
   const shortText =
-    compactDoubaoVideoPrompt(built, 280, ratio, duration, prefixOpts)
+    compactDoubaoVideoPrompt(built, boardMulti ? 5000 : 280, ratio, duration, prefixOpts)
       .replace(/\nCG国漫电影级渲染[^\n]*/g, "")
       .trim() || "生成视频：让画面中的人物自然活动，镜头缓慢推进";
 
   const csrf = await warmCsrf(sessionId, cookieHeader);
-  // 优先请求传入（项目级账号对话），其次账号镜像
-  let threadId =
-    String(body.conversationId || account?.conversationId || "").trim() ||
-    undefined;
+  // 优先请求传入的项目级对话；无则留空新建，并回写项目（不回落账号全局窗，避免串项目）
+  let threadId = String(body.conversationId || "").trim() || undefined;
+  if (threadId === "0") threadId = undefined;
 
   const uploaded = [];
   const uploadFails = [];
@@ -1232,11 +1248,11 @@ export async function runContinueVideoUpstream(body) {
     err.status = 400;
     throw err;
   }
-  let conversationId = String(
-    body.conversationId || account?.conversationId || "",
-  ).trim();
+  let conversationId = String(body.conversationId || "").trim();
   if (!conversationId || conversationId === "0") {
-    const err = new Error("缺少豆包对话 id，无法在同一聊天窗继续");
+    const err = new Error(
+      "缺少项目豆包对话 id，无法在同一聊天窗继续。请先生成一次视频。",
+    );
     err.status = 400;
     throw err;
   }

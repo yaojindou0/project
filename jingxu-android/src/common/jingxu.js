@@ -1,15 +1,20 @@
 /** 镜叙安卓端与网页版共用的数据模型、提示词与本地存储。生成请求打到本机/局域网的 aisource 服务。 */
 
 import {
+  deleteMedia,
   dehydrateCharacters,
   dehydrateProjectMedia,
   hydrateCharacters,
   hydrateProjectMedia,
+  isDataUrl,
   isEphemeralMediaUrl,
   isMediaRef,
   isPortableMediaUrl as isPortableMediaUrlIdb,
+  putDataUrl,
   toPersistentMediaUrl as toPersistentMediaUrlIdb,
 } from "./media-db.js";
+
+export { deleteMedia, isDataUrl, isMediaRef, putDataUrl };
 
 export const STYLE_PRESETS = [
   {

@@ -152,22 +152,49 @@ export async function putDataUrl(dataUrl) {
   }
 }
 
-export async function resolveMediaUrl(url) {
-  if (!url) return undefined;
-  if (!isMediaRef(url)) return url;
+async function readMediaRecord(url) {
+  if (!isMediaRef(url)) return undefined;
   const id = url.slice(MEDIA_REF_PREFIX.length);
   try {
     const db = await openDb();
     try {
       const tx = db.transaction(STORE, "readonly");
-      const rec = await idbReq(tx.objectStore(STORE).get(id));
-      if (!rec?.base64) return undefined;
-      return toDataUrl(rec.mime, rec.base64);
+      return await idbReq(tx.objectStore(STORE).get(id));
     } finally {
       db.close();
     }
   } catch {
     return undefined;
+  }
+}
+
+export function isLikelyVideoUrl(url) {
+  if (!url) return false;
+  if (/^data:video\//i.test(url)) return true;
+  return /\.(mp4|webm|mov)(?:$|\?)/i.test(url) || /\/video/i.test(url);
+}
+
+export async function resolveMediaUrl(url) {
+  if (!url) return undefined;
+  if (!isMediaRef(url)) return url;
+  const rec = await readMediaRecord(url);
+  if (!rec?.base64) return undefined;
+  return toDataUrl(rec.mime, rec.base64);
+}
+
+export async function deleteMedia(url) {
+  if (!url || !isMediaRef(url)) return;
+  const id = url.slice(MEDIA_REF_PREFIX.length);
+  try {
+    const db = await openDb();
+    try {
+      const tx = db.transaction(STORE, "readwrite");
+      await idbReq(tx.objectStore(STORE).delete(id));
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* ignore */
   }
 }
 
@@ -234,12 +261,17 @@ export async function dehydrateProjectMedia(project) {
   };
 }
 
-/** 读出后：IndexedDB 引用 → data URL；残留 tmp-media 尽量当场修复 */
+/** 读出后：图片 ref→data；视频 ref/临时链保持短地址，避免二次出片 OOM */
 export async function hydrateProjectMedia(project) {
   const load = async (u) => {
     if (!u) return undefined;
-    if (isMediaRef(u)) return (await resolveMediaUrl(u)) || undefined;
+    if (isMediaRef(u)) {
+      const rec = await readMediaRecord(u);
+      if (rec?.mime?.startsWith("video/")) return u;
+      return (await resolveMediaUrl(u)) || undefined;
+    }
     if (isEphemeralMediaUrl(u) || (String(u).startsWith("/") && !/^https?:/i.test(u))) {
+      if (isLikelyVideoUrl(u) || /\/(?:api\/)?tmp-media\//i.test(u)) return u;
       return (await toPersistentMediaUrl(u)) || undefined;
     }
     return u;

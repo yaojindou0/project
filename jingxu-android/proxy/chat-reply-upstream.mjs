@@ -13,17 +13,15 @@ export async function runChatReplyUpstream(body, _chatUrl) {
     err.status = 400;
     throw err;
   }
-  const { account, sessionId } = resolveDoubaoAuth(body.settings);
+  const { sessionId } = resolveDoubaoAuth(body.settings);
   if (!sessionId) {
     const err = new Error("请先在设置里登录豆包，或粘贴网页 session");
     err.status = 400;
     throw err;
   }
 
-  const threadId =
-    String(body.conversationId || "").trim() ||
-    String(account?.conversationId || "").trim() ||
-    "";
+  // 只认请求传入的项目级对话 id，避免回落到账号全局窗串到其他项目
+  const threadId = String(body.conversationId || "").trim();
 
   if (!threadId || threadId === "0") {
     const err = new Error(
