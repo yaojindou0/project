@@ -1242,14 +1242,13 @@ export default {
       this.onPremiseBlur();
       if (this.studioMode === "board") {
         this.ensureBoardShots();
-        // 把分镜词同步到尚无文案的镜头
+        // 侧栏改词始终同步到各镜，避免与 premise 分叉
         const prompt = String(this.premise || "").trim();
         if (prompt && this.project?.shots?.length) {
-          this.project.shots = this.project.shots.map((s) =>
-            s.storyboardPrompt?.trim()
-              ? s
-              : { ...s, storyboardPrompt: prompt },
-          );
+          this.project.shots = this.project.shots.map((s) => ({
+            ...s,
+            storyboardPrompt: prompt,
+          }));
           this.persist();
         }
       }
@@ -1305,25 +1304,28 @@ export default {
         this.error = (this.project.characters || []).length
           ? "分镜词里未匹配到角色名，请确认角色卡名称出现在分镜词中"
           : "暂无角色卡，请先添加或导入角色";
-      } else if (mode === "auto") {
-        this.error = "";
-        uni.showToast({
-          title: `已勾选 ${keys.length} 人`,
-          icon: "none",
-          duration: 1500,
-        });
       } else {
         this.error = "";
+        const tip =
+          mode === "all"
+            ? `已全选 ${keys.length} 人`
+            : mode === "none"
+              ? "已清空勾选"
+              : `已勾选 ${keys.length} 人`;
+        uni.showToast({ title: tip, icon: "none", duration: 1500 });
       }
     },
     toggleBoardChar(c) {
       this.ensureBoardShots();
-      const shot = this.boardFocusShot || this.boardShot;
-      if (!shot) return;
-      this.toggleChar(shot, c);
-      this.boardCharKeys = this.selectedKeys(
-        this.project.shots.find((s) => s.id === shot.id) || shot,
-      );
+      if (!this.project?.characters?.length) return;
+      const key = characterKey(c);
+      const cur = Array.isArray(this.boardCharKeys)
+        ? [...this.boardCharKeys]
+        : this.selectedKeys(this.boardFocusShot || this.boardShot);
+      const next = cur.includes(key)
+        ? cur.filter((k) => k !== key)
+        : [...cur, key];
+      this.boardCharKeys = next;
       this.syncBoardCharKeysToShots();
       this.persist();
     },
@@ -1344,18 +1346,36 @@ export default {
       // 模型以公共参数 Seedance 为准；可传入覆盖
       if (variant === "mini" || variant === "fast") this.variant = variant;
       this.error = "";
-      // 先释放旧成片（IDB / 内存），再清空引用，避免二次出片 OOM 崩溃
-      for (const s of this.project.shots || []) {
-        if (s.videoUrl) void deleteMedia(s.videoUrl);
+      // 未手动勾选时按分镜词自动匹配，避免出片不带角色图
+      let keys = Array.isArray(this.boardCharKeys) ? [...this.boardCharKeys] : null;
+      if (keys === null) {
+        keys = matchShotCharacters(
+          {
+            ...primary,
+            storyboardPrompt: prompt,
+            scene: [primary.scene, prompt].filter(Boolean).join("\n"),
+          },
+          this.project.characters || [],
+        ).map(characterKey);
+        this.boardCharKeys = keys;
+      }
+      // 先释放旧成片（IDB / 内存），再清空引用；共享 url 只删一次
+      {
+        const seen = new Set();
+        for (const s of this.project.shots || []) {
+          const u = s.videoUrl;
+          if (u && !seen.has(u)) {
+            seen.add(u);
+            void deleteMedia(u);
+          }
+        }
       }
       // 同步分镜词；再次出片时清掉旧成片
       this.project.shots = this.project.shots.map((s) => ({
         ...s,
         storyboardPrompt: prompt,
         duration: this.durationPerShot,
-        videoCharacterKeys: Array.isArray(this.boardCharKeys)
-          ? [...this.boardCharKeys]
-          : s.videoCharacterKeys,
+        videoCharacterKeys: [...keys],
         videoUrl: "",
         status: "pending",
         error: "",
@@ -1375,8 +1395,13 @@ export default {
     },
     boardResetVideos() {
       if (!this.project?.shots?.length) return;
+      const seen = new Set();
       for (const s of this.project.shots) {
-        if (s.videoUrl) void deleteMedia(s.videoUrl);
+        const u = s.videoUrl;
+        if (u && !seen.has(u)) {
+          seen.add(u);
+          void deleteMedia(u);
+        }
       }
       this.project.shots = this.project.shots.map((s) => ({
         ...s,
@@ -1998,22 +2023,73 @@ export default {
     },
     selectShotChars(shot, mode) {
       let keys = [];
-      if (mode === "all") keys = this.project.characters.map((c) => characterKey(c));
-      else if (mode === "auto") {
-        keys = matchShotCharacters(shot, this.project.characters).map(characterKey);
+      if (mode === "all") {
+        keys = this.project.characters.map((c) => characterKey(c));
+      } else if (mode === "auto") {
+        const prompt = String(this.premise || "").trim();
+        const matchShot = {
+          ...shot,
+          storyboardPrompt: prompt || shot.storyboardPrompt || "",
+          scene: [shot.scene, prompt].filter(Boolean).join("\n"),
+        };
+        keys = matchShotCharacters(matchShot, this.project.characters).map(
+          characterKey,
+        );
+        if (!keys.length) {
+          this.error = (this.project.characters || []).length
+            ? "分镜里未匹配到角色名，请确认角色卡名称出现在分镜词/台词中"
+            : "暂无角色卡，请先添加或导入角色";
+        } else {
+          this.error = "";
+          uni.showToast({
+            title: `已勾选 ${keys.length} 人`,
+            icon: "none",
+            duration: 1500,
+          });
+        }
       }
       this.patchShot(shot.id, { videoCharacterKeys: keys });
     },
     async generateShotVideo(shot, variant) {
       this.shotSection = "video";
-      const prompt = composeVideoPrompt(shot, this.project.style, this.project.aspectRatio);
-      if (!prompt.trim()) {
+      // premiseText / videoPrompt 分开命名，避免与旧代码重复声明 const prompt
+      const premiseText = String(
+        this.premise || this.project?.premise || "",
+      ).trim();
+      const promptShot =
+        this.studioMode === "board"
+          ? {
+              ...shot,
+              storyboardPrompt: premiseText || shot.storyboardPrompt || "",
+            }
+          : shot;
+      const videoPrompt = composeVideoPrompt(
+        promptShot,
+        this.project.style,
+        this.project.aspectRatio,
+      );
+      if (!videoPrompt.trim()) {
         this.patchShot(shot.id, { status: "error", error: "请先填写分镜词或台词" });
         return;
       }
       const imageUrl = this.chainedFrame(shot);
-      // 与 PC 一致：已定义用勾选（含 []）；未定义才自动捕捉
-      const selectedKeys = this.selectedKeys(shot);
+      // 已分镜优先公共勾选；否则本镜勾选；未定义再按分镜词自动匹配
+      let selectedKeys;
+      if (this.studioMode === "board" && Array.isArray(this.boardCharKeys)) {
+        selectedKeys = [...this.boardCharKeys];
+      } else if (shot.videoCharacterKeys !== undefined) {
+        selectedKeys = shot.videoCharacterKeys;
+      } else {
+        const matchShot = {
+          ...shot,
+          storyboardPrompt: premiseText || shot.storyboardPrompt || "",
+          scene: [shot.scene, premiseText].filter(Boolean).join("\n"),
+        };
+        selectedKeys = matchShotCharacters(
+          matchShot,
+          this.project.characters,
+        ).map(characterKey);
+      }
       const involved = this.project.characters.filter((c) => selectedKeys.includes(characterKey(c)));
       const withImg = involved.filter((c) => c.threeViewUrl || c.referenceImageUrl);
       const lockedWithImg = this.project.characters.filter((c) => c.locked && (c.threeViewUrl || c.referenceImageUrl));
@@ -2037,11 +2113,12 @@ export default {
         1,
         this.project.shots?.length || Number(this.shotCount) || 1,
       );
-      const boardMulti = this.studioMode === "board" && totalShots > 1;
+      const onBoard = this.studioMode === "board";
+      const boardMulti = onBoard && totalShots > 1;
       this.busyShotId = shot.id;
       this.selectShotTab(shot.id);
-      // 已分镜多镜：各镜 tab 同步「处理中」，但仍只发一次请求
-      if (boardMulti) {
+      // 已分镜：各镜同步「处理中」，但仍只发一次请求
+      if (onBoard) {
         this.project.shots = this.project.shots.map((s) => ({
           ...s,
           status: "animating",
@@ -2074,18 +2151,28 @@ export default {
             `${label || "参考图"}无法读取，请重新生成该图后再出片`,
           );
         };
-        // 已分镜多镜一次请求：首帧取首镜，末帧取末镜
+        // 已分镜：首帧取首镜，末帧取末镜（单镜时相同）
         const lastShot =
-          boardMulti && this.boardLastShot && this.boardLastShot.id !== shot.id
+          onBoard && this.boardLastShot && this.boardLastShot.id !== shot.id
             ? this.boardLastShot
             : shot;
-        const frameUrl = imageUrl ? await persistUrl(imageUrl, "首帧") : "";
-        const sceneUrl = shot.sceneImageUrl
-          ? await persistUrl(shot.sceneImageUrl, "场景图")
+        const firstForFrame =
+          onBoard && this.boardShot ? this.boardShot : shot;
+        const boardImageUrl = onBoard
+          ? this.chainedFrame(firstForFrame) || imageUrl
+          : imageUrl;
+        const frameUrl = boardImageUrl
+          ? await persistUrl(boardImageUrl, onBoard ? "首镜首帧" : "首帧")
+          : "";
+        const sceneUrl = (firstForFrame.sceneImageUrl || shot.sceneImageUrl)
+          ? await persistUrl(
+              firstForFrame.sceneImageUrl || shot.sceneImageUrl,
+              "场景图",
+            )
           : "";
         const lastSrc = lastShot.lastFrameUrl || shot.lastFrameUrl;
         const lastUrl = lastSrc
-          ? await persistUrl(lastSrc, boardMulti ? "末镜末帧" : "末帧")
+          ? await persistUrl(lastSrc, onBoard && boardMulti ? "末镜末帧" : "末帧")
           : "";
         const characters = await Promise.all(
           this.project.characters.map(async (c) => {
@@ -2118,7 +2205,7 @@ export default {
         const data = await apiRequest(
           UPSTREAM_PATHS.video,
           {
-            prompt,
+            prompt: videoPrompt,
             imageUrl: frameUrl || undefined,
             lastFrameUrl: lastUrl || undefined,
             sceneImageUrl: sceneUrl || undefined,
@@ -2136,7 +2223,10 @@ export default {
               dialogue: shot.dialogue,
               lines: shot.lines,
               characterIntros: shot.characterIntros,
-              storyboardPrompt: shot.storyboardPrompt,
+              storyboardPrompt:
+                (onBoard ? premiseText : "") ||
+                shot.storyboardPrompt ||
+                "",
               imagePrompt: shot.imagePrompt,
               camera: shot.camera,
               videoCharacterKeys: selectedKeys,
@@ -2160,8 +2250,8 @@ export default {
             id: uid("vchat"),
             role: "user",
             text: boardMulti
-              ? `生成视频（${totalShots}镜一次）：${prompt.slice(0, 400)}`
-              : `生成视频：${prompt.slice(0, 400)}`,
+              ? `生成视频（${totalShots}镜一次）：${videoPrompt.slice(0, 400)}`
+              : `生成视频：${videoPrompt.slice(0, 400)}`,
             at: now,
           });
           messages.push({
@@ -2186,7 +2276,7 @@ export default {
               /* keep original */
             }
           }
-          // 成片挂在首镜；其余镜只同步状态（同一段多镜视频）
+          // 一次成片：各镜共享 videoUrl + 对话，切镜也能播/看历史
           this.project.shots = this.project.shots.map((s) => {
             if (s.id === shot.id) {
               return {
@@ -2197,20 +2287,26 @@ export default {
                 usedAccountLabel: data.accountLabel,
                 usedModel: data.model,
                 triedChannels: data.tried,
-                ...(imageUrl ? { imageUrl } : {}),
+                ...(boardImageUrl || imageUrl
+                  ? { imageUrl: boardImageUrl || imageUrl }
+                  : {}),
                 videoChat,
               };
             }
-            if (!boardMulti) return s;
+            if (!onBoard) return s;
             return {
               ...s,
+              videoUrl: storedVideo,
               status: "ready",
               error: "",
               usedAccountLabel: data.accountLabel,
               usedModel: data.model,
+              videoChat,
             };
           });
-          if (!this.project.coverUrl) this.project.coverUrl = imageUrl || shot.imageUrl;
+          if (!this.project.coverUrl) {
+            this.project.coverUrl = boardImageUrl || imageUrl || shot.imageUrl;
+          }
           this.modeHint = boardMulti
             ? `${data.mode || ""} · ${totalShots}镜一次请求`.trim()
             : data.mode || "";
@@ -2228,7 +2324,7 @@ export default {
                 videoChat,
               };
             }
-            if (!boardMulti) return s;
+            if (!onBoard) return s;
             return { ...s, status: "error", error: errText };
           });
           this.persist();
@@ -2236,7 +2332,7 @@ export default {
         this.scrollChatToEnd();
       } catch (e) {
         const msg = e?.message || "出片失败";
-        if (boardMulti) {
+        if (onBoard) {
           this.project.shots = this.project.shots.map((s) => ({
             ...s,
             status: "error",
@@ -2306,7 +2402,16 @@ export default {
           aspectRatio: this.project.aspectRatio,
           duration: resolveShotDuration(shot, this.project.durationPerShot),
           variant: this.variant,
-          context: [shot.scene, shot.storyboardPrompt].filter(Boolean).join("\n"),
+          context: [
+            shot.scene,
+            (this.studioMode === "board"
+              ? String(this.premise || this.project?.premise || "").trim()
+              : "") ||
+              shot.storyboardPrompt ||
+              "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
         });
         if (Array.isArray(data.accounts)) {
           this.settings = { ...this.settings, jimengAccounts: data.accounts };
@@ -2325,10 +2430,25 @@ export default {
             at: new Date().toISOString(),
           });
         }
-        this.patchShot(shot.id, {
-          ...(data.videoUrl ? { videoUrl: data.videoUrl, status: "ready", error: "" } : {}),
-          videoChat: { ...(current?.videoChat || {}), conversationId: data.conversationId || conversationId, messages },
-        });
+        const mediaPatch = {
+          ...(data.videoUrl
+            ? { videoUrl: data.videoUrl, status: "ready", error: "" }
+            : {}),
+          videoChat: {
+            ...(current?.videoChat || {}),
+            conversationId: data.conversationId || conversationId,
+            messages,
+          },
+        };
+        if (this.studioMode === "board") {
+          this.project.shots = this.project.shots.map((s) => ({
+            ...s,
+            ...mediaPatch,
+          }));
+          this.persist();
+        } else {
+          this.patchShot(shot.id, mediaPatch);
+        }
         this.scrollChatToEnd();
       } catch (e) {
         this.error = toastErr(e, "回复失败");
