@@ -15,7 +15,7 @@ import {
   runAuthLoginUpstream,
   runAuthSendCodeUpstream,
 } from "./proxy/auth-sms-upstream.mjs";
-import { getTmpMedia } from "./proxy/tmp-media.mjs";
+import { getTmpMedia, putTmpMedia } from "./proxy/tmp-media.mjs";
 
 const localConfig = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -335,6 +335,40 @@ function jingxuConfig() {
   };
   const tmpMedia = () => async (req, res, next) => {
     const pathname = (req.url || "").split("?")[0];
+    // 出片前卸大图：POST { dataUrl } → { url: "/tmp-media/..." }
+    if (
+      req.method === "POST" &&
+      (pathname === "/api/tmp-media" || pathname === "/tmp-media")
+    ) {
+      try {
+        const raw = await readBody(req);
+        const body = JSON.parse(raw.toString("utf8") || "{}");
+        const dataUrl = String(body.dataUrl || "").trim();
+        if (dataUrl.startsWith("data:") && /;base64,/i.test(dataUrl)) {
+          const m = dataUrl.match(/^data:([^;,]+)?;base64,(.+)$/i);
+          if (!m) return sendJson(res, 400, { error: "无效 dataUrl" });
+          const mime = m[1] || "image/jpeg";
+          const bytes = Buffer.from(m[2], "base64");
+          if (bytes.length < 32) return sendJson(res, 400, { error: "图片过小" });
+          const url = await putTmpMedia(bytes, mime);
+          return sendJson(res, 200, { url });
+        }
+        const b64 = String(body.base64 || "").trim();
+        if (b64) {
+          const mime =
+            String(body.mime || "image/jpeg").split(";")[0] || "image/jpeg";
+          const bytes = Buffer.from(b64, "base64");
+          if (bytes.length < 32) return sendJson(res, 400, { error: "图片过小" });
+          const url = await putTmpMedia(bytes, mime);
+          return sendJson(res, 200, { url });
+        }
+        return sendJson(res, 400, { error: "缺少 dataUrl 或 base64" });
+      } catch (e) {
+        return sendJson(res, 500, {
+          error: e instanceof Error ? e.message : "上传临时媒体失败",
+        });
+      }
+    }
     const m = pathname.match(/^\/(?:api\/)?tmp-media\/([a-zA-Z0-9]+)$/);
     if (!m || req.method !== "GET") return next();
     try {

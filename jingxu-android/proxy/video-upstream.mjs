@@ -276,7 +276,7 @@ function collectDoubaoVideoAssets(body) {
     ...(hasLastFrame ? [body.lastFrameUrl] : []),
   ]
     .filter(Boolean)
-    .slice(0, 9);
+    .slice(0, 10);
 
   const assets = [];
   let i = 0;
@@ -302,7 +302,7 @@ function collectDoubaoVideoAssets(body) {
     const url = imageUrls[i++];
     if (url) assets.push({ url, role: "last_frame", label: "末帧" });
   }
-  while (i < imageUrls.length && assets.length < 9) {
+  while (i < imageUrls.length && assets.length < 10) {
     const url = imageUrls[i++];
     if (url) {
       assets.push({
@@ -313,7 +313,7 @@ function collectDoubaoVideoAssets(body) {
     }
   }
   return {
-    assets: assets.slice(0, 6),
+    assets: assets.slice(0, 10),
     locked,
     matchedNames: involved.map((c) => c.name).filter(Boolean),
   };

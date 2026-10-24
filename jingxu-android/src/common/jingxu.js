@@ -10,11 +10,18 @@ import {
   isEphemeralMediaUrl,
   isMediaRef,
   isPortableMediaUrl as isPortableMediaUrlIdb,
+  offloadMediaForRequest,
   putDataUrl,
   toPersistentMediaUrl as toPersistentMediaUrlIdb,
 } from "./media-db.js";
 
-export { deleteMedia, isDataUrl, isMediaRef, putDataUrl };
+export {
+  deleteMedia,
+  isDataUrl,
+  isMediaRef,
+  offloadMediaForRequest,
+  putDataUrl,
+};
 
 export const STYLE_PRESETS = [
   {
@@ -716,7 +723,7 @@ export function matchShotCharacters(shot, characters) {
     if (!name || SKIP_SPEAKERS.has(name)) return;
     const c = byNorm.get(normName(name));
     if (!c) return;
-    if (hit.size >= 4 && !force && !hit.has(characterKey(c))) return;
+    if (hit.size >= 10 && !force && !hit.has(characterKey(c))) return;
     hit.set(characterKey(c), c);
   };
   for (const intro of shot.characterIntros || []) add(intro.name, true);
@@ -728,17 +735,17 @@ export function matchShotCharacters(shot, characters) {
     .filter(Boolean)
     .join("\n");
   for (const m of hay.matchAll(/([\u4e00-\u9fff·]{2,6})\s*[：:]/g)) add(m[1]);
-  if (hit.size < 4) {
+  if (hit.size < 10) {
     const sorted = [...usable].sort((a, b) => b.name.trim().length - a.name.trim().length);
     for (const c of sorted) {
-      if (hit.size >= 4) break;
+      if (hit.size >= 10) break;
       const n = c.name.trim();
       if (n.length < 2) continue;
       if (/群体|众人|护卫|族人|士兵|弟子|路人/.test(n)) continue;
       if (hay.includes(n)) add(n);
     }
   }
-  return [...hit.values()].slice(0, 4);
+  return [...hit.values()].slice(0, 10);
 }
 
 /** 与 PC shot-script.ts flattenDialogue 一致 */

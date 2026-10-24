@@ -684,6 +684,7 @@ import {
   deleteMedia,
   isDataUrl,
   isMediaRef,
+  offloadMediaForRequest,
   putDataUrl,
   withActiveAccount,
   withProjectConversationId,

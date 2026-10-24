@@ -294,6 +294,45 @@ export async function hydrateProjectMedia(project) {
   };
 }
 
+/** 出片请求体里超过此长度的 data URL 改走 /tmp-media，避免浏览器 OOM 崩溃 */
+const REQUEST_DATA_URL_OFFLOAD = 4096;
+
+/**
+ * 出片前把大图 / jingxu-media 卸成短链，禁止多张大 base64 塞进 JSON。
+ */
+export async function offloadMediaForRequest(url) {
+  if (!url) return undefined;
+  let s = String(url).trim();
+  if (!s) return undefined;
+
+  if (isMediaRef(s)) {
+    const resolved = await resolveMediaUrl(s);
+    if (!resolved) return undefined;
+    s = resolved;
+  }
+
+  if (isDataUrl(s) && s.length > REQUEST_DATA_URL_OFFLOAD) {
+    try {
+      const res = await fetch("/api/tmp-media", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataUrl: s }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.url) return String(data.url);
+    } catch {
+      /* 回退原链 */
+    }
+  }
+
+  if (isEphemeralMediaUrl(s) || (s.startsWith("/") && !/^https?:/i.test(s))) {
+    return s;
+  }
+  if (/^https?:\/\//i.test(s)) return s;
+  if (isDataUrl(s)) return s;
+  return undefined;
+}
+
 /** 角色列表单独脱水，供角色库缓存 */
 export async function dehydrateCharacters(characters) {
   const project = await dehydrateProjectMedia({
